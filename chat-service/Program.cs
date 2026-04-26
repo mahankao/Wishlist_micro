@@ -120,7 +120,7 @@ app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 
-await EnsureDatabaseCreatedAsync(app.Services);
+await MigrateDatabaseAsync(app.Services);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "chat-service" }));
 app.MapGet("/chat/health", () => Results.Ok(new { status = "ok", service = "chat-service" }));
@@ -313,7 +313,7 @@ static async Task<IResult?> EnsureAccessAsync(
     return null;
 }
 
-static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
+static async Task MigrateDatabaseAsync(IServiceProvider services)
 {
     using var scope = services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<ChatDbContext>();
@@ -323,7 +323,7 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
     {
         try
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
             return;
         }
         catch when (attempt < maxAttempts)
@@ -332,5 +332,5 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
         }
     }
 
-    await db.Database.EnsureCreatedAsync();
+    await db.Database.MigrateAsync();
 }

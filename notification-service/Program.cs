@@ -29,7 +29,7 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseHttpMetrics();
 
-await EnsureDatabaseCreatedAsync(app.Services);
+await MigrateDatabaseAsync(app.Services);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "notification-service" }));
 app.MapGet("/notifications/health", () => Results.Ok(new { status = "ok", service = "notification-service" }));
@@ -57,7 +57,7 @@ app.MapGet("/notifications/inbox", async (NotificationDbContext db, Cancellation
 
 app.Run();
 
-static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
+static async Task MigrateDatabaseAsync(IServiceProvider services)
 {
     using var scope = services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
@@ -67,8 +67,7 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
     {
         try
         {
-            await db.Database.EnsureCreatedAsync();
-            await EnsureInboxSchemaAsync(db);
+            await db.Database.MigrateAsync();
             return;
         }
         catch when (attempt < maxAttempts)
@@ -77,26 +76,5 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
         }
     }
 
-    await db.Database.EnsureCreatedAsync();
-    await EnsureInboxSchemaAsync(db);
-}
-
-static async Task EnsureInboxSchemaAsync(NotificationDbContext db)
-{
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS notification_inbox_messages (
-            event_id uuid PRIMARY KEY,
-            event_type character varying(200) NOT NULL,
-            wishlist_id uuid NOT NULL,
-            item_id uuid NOT NULL,
-            owner_user_id uuid NOT NULL,
-            actor_user_id uuid NOT NULL,
-            occurred_at_utc timestamp with time zone NOT NULL,
-            received_at_utc timestamp with time zone NOT NULL
-        );
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE INDEX IF NOT EXISTS ix_notification_inbox_messages_received_at_utc
-        ON notification_inbox_messages (received_at_utc);
-        """);
+    await db.Database.MigrateAsync();
 }

@@ -98,7 +98,7 @@ app.UseHttpMetrics();
 app.UseAuthentication();
 app.UseAuthorization();
 
-await EnsureDatabaseCreatedAsync(app.Services);
+await MigrateDatabaseAsync(app.Services);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "wishlist-service" }));
 app.MapGet("/wishlists/health", () => Results.Ok(new { status = "ok", service = "wishlist-service" }));
@@ -429,7 +429,7 @@ static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
 static WishlistItemResponse ToItemResponse(WishlistItem item) =>
     new(item.Id, item.Title, item.Url, item.Price, item.Comment, item.ReservedByUserId is not null, item.ReservedAtUtc, item.CreatedAtUtc);
 
-static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
+static async Task MigrateDatabaseAsync(IServiceProvider services)
 {
     using var scope = services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<WishlistDbContext>();
@@ -439,8 +439,7 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
     {
         try
         {
-            await db.Database.EnsureCreatedAsync();
-            await EnsureReservationColumnsAsync(db);
+            await db.Database.MigrateAsync();
             return;
         }
         catch when (attempt < maxAttempts)
@@ -449,40 +448,7 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
         }
     }
 
-    await db.Database.EnsureCreatedAsync();
-    await EnsureReservationColumnsAsync(db);
-}
-
-static async Task EnsureReservationColumnsAsync(WishlistDbContext db)
-{
-    await db.Database.ExecuteSqlRawAsync("""
-        ALTER TABLE wishlist_items
-        ADD COLUMN IF NOT EXISTS reserved_by_user_id uuid NULL;
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        ALTER TABLE wishlist_items
-        ADD COLUMN IF NOT EXISTS reserved_at_utc timestamp with time zone NULL;
-        """);
-
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE TABLE IF NOT EXISTS outbox_messages (
-            id uuid PRIMARY KEY,
-            type character varying(200) NOT NULL,
-            payload text NOT NULL,
-            occurred_at_utc timestamp with time zone NOT NULL,
-            published_at_utc timestamp with time zone NULL,
-            attempts integer NOT NULL DEFAULT 0,
-            last_error character varying(2000) NULL
-        );
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE INDEX IF NOT EXISTS ix_outbox_messages_published_at_utc
-        ON outbox_messages (published_at_utc);
-        """);
-    await db.Database.ExecuteSqlRawAsync("""
-        CREATE INDEX IF NOT EXISTS ix_outbox_messages_occurred_at_utc
-        ON outbox_messages (occurred_at_utc);
-        """);
+    await db.Database.MigrateAsync();
 }
 
 static void EnqueueOutboxEvent(WishlistDbContext db, WishlistItemReservationEvent message)

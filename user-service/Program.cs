@@ -86,7 +86,7 @@ app.UseHttpMetrics();
 app.UseAuthentication();
 app.UseAuthorization();
 
-await EnsureDatabaseCreatedAsync(app.Services);
+await MigrateDatabaseAsync(app.Services);
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "user-service" }));
 app.MapGet("/users/health", () => Results.Ok(new { status = "ok", service = "user-service" }));
@@ -173,7 +173,7 @@ static bool IsValidEmail(string email)
     return email.Contains('@') && email.Contains('.');
 }
 
-static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
+static async Task MigrateDatabaseAsync(IServiceProvider services)
 {
     using var scope = services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
@@ -183,7 +183,7 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
     {
         try
         {
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
             return;
         }
         catch when (attempt < maxAttempts)
@@ -192,5 +192,5 @@ static async Task EnsureDatabaseCreatedAsync(IServiceProvider services)
         }
     }
 
-    await db.Database.EnsureCreatedAsync();
+    await db.Database.MigrateAsync();
 }
