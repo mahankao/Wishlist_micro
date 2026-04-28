@@ -13,6 +13,8 @@ using UserService.Observability;
 using UserService.Security;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Все сервисы пишут логи в JSON, чтобы их удобно читать в Docker и связывать с correlationId.
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {
@@ -46,6 +48,7 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// JWT-настройки используются при выпуске токена и проверке защищенных endpoints.
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Key));
@@ -69,6 +72,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 
+// У каждого микросервиса своя БД; user-service работает только с user-db.
 builder.Services.AddDbContext<UserDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -80,6 +84,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Correlation ID позволяет проследить один запрос через gateway и backend-сервисы.
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseHttpMetrics();
@@ -88,12 +93,14 @@ app.UseAuthorization();
 
 await MigrateDatabaseAsync(app.Services);
 
+// Health endpoints используются Docker Compose и ручной проверкой готовности сервиса.
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "user-service" }));
 app.MapGet("/users/health", () => Results.Ok(new { status = "ok", service = "user-service" }));
 app.MapMetrics("/metrics");
 
 app.MapPost("/auth/register", async (RegisterRequest request, UserDbContext db, PasswordHasher<User> passwordHasher) =>
 {
+    // Нормализуем email перед проверкой уникальности, чтобы разные регистры не создавали дубликаты.
     var email = request.Email.Trim().ToLowerInvariant();
     var displayName = request.DisplayName.Trim();
     if (!IsValidEmail(email) || request.Password.Length < 8 || displayName.Length is < 2 or > 128)
@@ -123,6 +130,7 @@ app.MapPost("/auth/register", async (RegisterRequest request, UserDbContext db, 
 
 app.MapPost("/auth/login", async (LoginRequest request, UserDbContext db, PasswordHasher<User> passwordHasher, JwtTokenService tokenService) =>
 {
+    // При успешном входе frontend получает JWT и дальше отправляет его в Authorization header.
     var email = request.Email.Trim().ToLowerInvariant();
     var user = await db.Users.FirstOrDefaultAsync(x => x.Email == email);
     if (user is null)
@@ -179,6 +187,7 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
     var db = scope.ServiceProvider.GetRequiredService<UserDbContext>();
 
     const int maxAttempts = 10;
+    // В Docker база может стартовать дольше сервиса, поэтому миграции выполняются с повторами.
     for (var attempt = 1; attempt <= maxAttempts; attempt++)
     {
         try

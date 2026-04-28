@@ -16,6 +16,8 @@ using WishlistService.Observability;
 using WishlistService.Security;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// JSON-логи проще читать в docker logs и связывать с correlationId.
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {
@@ -49,6 +51,7 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// Wishlist-service проверяет JWT, но не хранит пароли пользователей.
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Key));
@@ -72,6 +75,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<CorrelationHeaderHandler>();
 
+// Собственная БД сервиса: wishlist, items и outbox-сообщения лежат только здесь.
 builder.Services.AddDbContext<WishlistDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
@@ -79,12 +83,14 @@ builder.Services.Configure<UserServiceOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<WishlistOptions>(builder.Configuration.GetSection(WishlistOptions.SectionName));
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection(RabbitMqOptions.SectionName));
 builder.Services.Configure<OutboxOptions>(builder.Configuration.GetSection(OutboxOptions.SectionName));
+// Синхронный HTTP-вызов в user-service проверяет, что владелец wishlist существует.
 builder.Services.AddHttpClient<UserServiceClient>((serviceProvider, client) =>
 {
     var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<UserServiceOptions>>().Value;
     client.BaseAddress = new Uri(options.BaseUrl);
 })
 .AddHttpMessageHandler<CorrelationHeaderHandler>();
+// Фоновый worker публикует накопленные outbox-события в RabbitMQ.
 builder.Services.AddHostedService<OutboxPublisherHostedService>();
 
 var app = builder.Build();
@@ -92,6 +98,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Middleware добавляют correlationId, JSON-лог запроса и стандартные Prometheus HTTP-метрики.
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseHttpMetrics();
@@ -100,6 +107,7 @@ app.UseAuthorization();
 
 await MigrateDatabaseAsync(app.Services);
 
+// Health endpoints нужны для healthcheck контейнера и ручной проверки сервиса.
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "wishlist-service" }));
 app.MapGet("/wishlists/health", () => Results.Ok(new { status = "ok", service = "wishlist-service" }));
 app.MapMetrics("/metrics");
@@ -114,6 +122,7 @@ app.MapPost("/wishlists", async (
     var ownerUserId = GetUserId(principal);
     if (ownerUserId is null) return Results.Unauthorized();
 
+    // Пользовательские строки очищаются на входе, чтобы в БД попадали нормализованные значения.
     var title = request.Title.Trim();
     var description = request.Description?.Trim();
     if (!IsValidWishlistPayload(title, description))
@@ -158,6 +167,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     var ownerUserId = GetUserId(principal);
     if (ownerUserId is null) return Results.Unauthorized();
 
+    // Добавлять подарки может только владелец wishlist.
     var wishlist = await db.Wishlists.FirstOrDefaultAsync(x => x.Id == wishlistId, cancellationToken);
     if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
     if (wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
@@ -231,6 +241,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
     var reserverUserId = GetUserId(principal);
     if (reserverUserId is null) return Results.Unauthorized();
 
+    // Владелец не резервирует собственный подарок; резервирование предназначено для другого пользователя.
     var item = await db.WishlistItems
         .Include(x => x.Wishlist)
         .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
@@ -249,6 +260,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
     item.ReservedByUserId = reserverUserId.Value;
     item.ReservedAtUtc ??= DateTime.UtcNow;
 
+    // Событие сохраняется в той же транзакции, что и изменение item: это outbox pattern.
     EnqueueOutboxEvent(
         db,
         new WishlistItemReservationEvent(
@@ -296,6 +308,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/unreserve", async 
     item.ReservedByUserId = null;
     item.ReservedAtUtc = null;
 
+    // Разрезервирование тоже отправляется как событие, чтобы notification-service увидел изменение.
     EnqueueOutboxEvent(
         db,
         new WishlistItemReservationEvent(
@@ -435,6 +448,7 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
     var db = scope.ServiceProvider.GetRequiredService<WishlistDbContext>();
 
     const int maxAttempts = 10;
+    // Повтор нужен для старта в Docker, когда PostgreSQL еще не принимает подключения.
     for (var attempt = 1; attempt <= maxAttempts; attempt++)
     {
         try
@@ -453,6 +467,7 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
 
 static void EnqueueOutboxEvent(WishlistDbContext db, WishlistItemReservationEvent message)
 {
+    // Пока RabbitMQ недоступен, событие остается в outbox и будет опубликовано следующей итерацией worker-а.
     db.OutboxMessages.Add(new OutboxMessage
     {
         Id = message.EventId,

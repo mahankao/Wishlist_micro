@@ -6,6 +6,8 @@ using NotificationService.Observability;
 using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Notification-service тоже пишет JSON-логи, чтобы события RabbitMQ было легко искать по времени и сервису.
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {
@@ -16,26 +18,34 @@ builder.Logging.AddJsonConsole(options =>
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Inbox хранится в собственной notification-db; сервис не читает БД wishlist-service напрямую.
 builder.Services.AddDbContext<NotificationDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection(RabbitMqOptions.SectionName));
+
+// Hosted service постоянно слушает RabbitMQ и сохраняет новые события в inbox.
 builder.Services.AddHostedService<WishlistEventConsumerHostedService>();
 
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+
+// Middleware добавляют correlationId в ответы, пишут HTTP-логи и отдают Prometheus-метрики.
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseHttpMetrics();
 
 await MigrateDatabaseAsync(app.Services);
 
+// Health endpoints нужны для docker compose и быстрой ручной проверки.
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "notification-service" }));
 app.MapGet("/notifications/health", () => Results.Ok(new { status = "ok", service = "notification-service" }));
 app.MapMetrics("/metrics");
 app.MapGet("/notifications/inbox", async (NotificationDbContext db, CancellationToken cancellationToken) =>
 {
+    // Endpoint показывает последние события, которые notification-service получил из RabbitMQ.
     var items = await db.InboxMessages
         .OrderByDescending(x => x.ReceivedAtUtc)
         .Take(100)
@@ -63,6 +73,7 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
     var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
 
     const int maxAttempts = 10;
+    // Повторы нужны на старте контейнеров, пока PostgreSQL еще поднимается.
     for (var attempt = 1; attempt <= maxAttempts; attempt++)
     {
         try

@@ -16,6 +16,8 @@ using Microsoft.OpenApi.Models;
 using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Chat-service пишет структурированные JSON-логи, как и остальные backend-сервисы.
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {
@@ -71,7 +73,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ClockSkew = TimeSpan.FromSeconds(30)
         };
 
-        // Allow JWT in WebSocket query string for /chat/ws.
+        // Для WebSocket браузер не может удобно передать Authorization header, поэтому JWT берется из query string.
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -90,9 +92,11 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddTransient<CorrelationHeaderHandler>();
 
+// Сообщения чата хранятся в отдельной chat-db, без прямого доступа к БД других сервисов.
 builder.Services.AddDbContext<ChatDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
+// HTTP-клиенты проверяют пользователя и существование комнаты через публичные API других сервисов.
 builder.Services.AddHttpClient<UserServiceClient>((serviceProvider, client) =>
 {
     var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<UserServiceOptions>>().Value;
@@ -113,6 +117,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Correlation ID и request logs помогают связать REST/WebSocket подготовку с вызовами user/wishlist сервисов.
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseHttpMetrics();
@@ -122,6 +127,7 @@ app.UseAuthorization();
 
 await MigrateDatabaseAsync(app.Services);
 
+// Health endpoints нужны для docker compose, а /metrics читает Prometheus.
 app.MapGet("/health", () => Results.Ok(new { status = "ok", service = "chat-service" }));
 app.MapGet("/chat/health", () => Results.Ok(new { status = "ok", service = "chat-service" }));
 app.MapMetrics("/metrics");
@@ -139,6 +145,7 @@ app.MapGet("/chat/messages", async (
     var userId = GetUserId(principal);
     if (userId is null) return Results.Unauthorized();
 
+    // Перед чтением истории проверяем, что пользователь и item существуют.
     var accessCheck = await EnsureAccessAsync(userId.Value, shareToken, itemId, userServiceClient, wishlistServiceClient, cancellationToken);
     if (accessCheck is not null) return accessCheck;
 
@@ -165,6 +172,7 @@ app.MapPost("/chat/messages", async (
     var userId = GetUserId(principal);
     if (userId is null) return Results.Unauthorized();
 
+    // Сообщение можно отправить только в существующую комнату wishlist item.
     var text = request.Text.Trim();
     if (string.IsNullOrWhiteSpace(text) || text.Length > 2000)
     {
@@ -230,6 +238,7 @@ app.Map("/chat/ws", async (
 
     var socket = await context.WebSockets.AcceptWebSocketAsync();
     var roomKey = $"{wishlistId:N}:{itemId:N}";
+    // Комната строится по wishlistId и itemId: все подключения к одному подарку получают общие сообщения.
     var connectionId = connectionManager.AddConnection(roomKey, socket);
     var buffer = new byte[4 * 1024];
 
@@ -319,6 +328,7 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
     var db = scope.ServiceProvider.GetRequiredService<ChatDbContext>();
 
     const int maxAttempts = 10;
+    // Миграции повторяются, чтобы сервис переживал медленный старт PostgreSQL в docker compose.
     for (var attempt = 1; attempt <= maxAttempts; attempt++)
     {
         try

@@ -6,6 +6,7 @@ public static class ServiceMetrics
 {
     public const string ServiceName = "user-service";
 
+    // Общие HTTP-метрики одинаковые во всех backend-сервисах, чтобы Grafana могла строить единые графики.
     public static readonly Counter HttpRequests = Metrics.CreateCounter(
         "http_requests_total",
         "Total number of HTTP requests.",
@@ -30,6 +31,7 @@ public static class ServiceMetrics
             LabelNames = ["service", "method", "path", "status_code"]
         });
 
+    // Бизнес-метрика показывает, сколько пользователей успешно зарегистрировалось через demo flow.
     public static readonly Counter UsersRegistered = Metrics.CreateCounter(
         "user_registered_total",
         "Total number of successfully registered users.");

@@ -1,83 +1,101 @@
 # WishList Microservices
 
-## Project Overview
-WishList is a demo microservices system for collaborative wishlist management.  
-It includes user authentication, wishlist and item management, item reservation, chat by wishlist item, and async notification event delivery.
+## О проекте
 
-This stage focuses on Lab 2 production readiness:
-- structured JSON logs
-- correlation ID propagation
-- Prometheus metrics
-- Grafana dashboard provisioning
-- environment variables cleanup
+WishList — демонстрационное микросервисное приложение для совместной работы со списками желаний.
 
-## Architecture
-### Services
-- API Gateway (`api-gateway`, Nginx)
-- User Service (`user-service`)
-- Wishlist Service (`wishlist-service`)
-- Chat Service (`chat-service`)
-- Notification Service (`notification-service`)
-- Frontend (`frontend`, React + Vite + Nginx)
+В проекте есть регистрация и вход пользователей, создание wishlist, добавление подарков, публичная ссылка на список, резервирование подарков другим пользователем, чат по подарку и асинхронные уведомления через RabbitMQ.
 
-### Infrastructure
-- PostgreSQL per service
-- RabbitMQ
-- Prometheus
-- Grafana
-- Docker Compose
+Текущий этап проекта закрывает требования лабораторной работы по готовности микросервисов к запуску и наблюдаемости:
 
-## How to Run
-1. Create `.env` from `.env.example` (optional for local defaults):
+- структурированные JSON-логи;
+- передача `X-Correlation-ID` между сервисами;
+- метрики Prometheus;
+- готовый dashboard для Grafana;
+- настройка через переменные окружения.
+
+## Архитектура
+
+### Сервисы
+
+- `api-gateway` — Nginx, единая точка входа в систему.
+- `user-service` — регистрация, вход, JWT и данные пользователей.
+- `wishlist-service` — wishlist, items, резервирование и outbox-события.
+- `chat-service` — REST и WebSocket чат по item/wishlist.
+- `notification-service` — получение событий из RabbitMQ и inbox.
+- `frontend` — React + Vite интерфейс для демонстрации сценария.
+
+### Инфраструктура
+
+- PostgreSQL — отдельная база данных для каждого backend-сервиса.
+- RabbitMQ — асинхронная доставка событий.
+- Prometheus — сбор метрик.
+- Grafana — визуализация метрик.
+- Docker Compose — запуск всего проекта одной командой.
+
+## Как запустить
+
+1. При необходимости создайте `.env` из примера:
+
 ```bash
 cp .env.example .env
 ```
 
-2. Run:
+Этот шаг необязательный: в `docker-compose.yml` уже заданы локальные значения по умолчанию.
+
+2. Запустите проект:
+
 ```bash
 docker compose up --build
 ```
 
-### URLs
+## Адреса
+
 - Frontend: http://localhost:3001
 - API Gateway: http://localhost:8080
 - RabbitMQ UI: http://localhost:15672
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 
-### Health checks
-- http://localhost:8080/health
-- http://localhost:5001/health
-- http://localhost:5002/health
-- http://localhost:5003/health
-- http://localhost:5004/health
+## Health checks
 
-### Swagger
-- http://localhost:5001/swagger
-- http://localhost:5002/swagger
-- http://localhost:5003/swagger
-- http://localhost:5004/swagger
+- API Gateway: http://localhost:8080/health
+- User Service: http://localhost:5001/health
+- Wishlist Service: http://localhost:5002/health
+- Chat Service: http://localhost:5003/health
+- Notification Service: http://localhost:5004/health
 
-## Demo Flow
-1. Register user
-2. Login
-3. Create wishlist
-4. Add item
-5. Copy public share token/link
-6. Open public wishlist
-7. Reserve item (from another user account)
-8. View my reservations
-9. Send chat message
-10. Check notification inbox (`/notifications/inbox`)
-11. Open Prometheus/Grafana and verify metrics
+## Swagger
 
-## Observability Notes
-- All backend services expose `/metrics`.
-- Backend HTTP logs are written as JSON to stdout.
-- `X-Correlation-ID` is supported and propagated between services.
-- API Gateway forwards `X-Correlation-ID` to upstreams and returns it in response headers.
+- User Service: http://localhost:5001/swagger
+- Wishlist Service: http://localhost:5002/swagger
+- Chat Service: http://localhost:5003/swagger
+- Notification Service: http://localhost:5004/swagger
 
-### Core business metrics
+## Основной демонстрационный сценарий
+
+1. Зарегистрировать первого пользователя.
+2. Войти под первым пользователем.
+3. Создать wishlist.
+4. Добавить item в wishlist.
+5. Скопировать public share token или public link.
+6. Зарегистрировать и открыть приложение под другим пользователем.
+7. Открыть публичный wishlist по share token.
+8. Зарезервировать item от имени второго пользователя.
+9. Посмотреть список моих резервирований.
+10. Отправить сообщение в чат по item.
+11. Открыть notification inbox: `/notifications/inbox`.
+12. Открыть Prometheus или Grafana и проверить, что метрики собираются.
+
+## Наблюдаемость
+
+- Все backend-сервисы отдают метрики на `/metrics`.
+- HTTP-логи backend-сервисов пишутся в stdout в JSON-формате.
+- `X-Correlation-ID` создается на gateway или backend-сервисе и передается дальше при межсервисных HTTP-вызовах.
+- API Gateway возвращает `X-Correlation-ID` в response headers.
+
+### Основные бизнес-метрики
+
 - `user_registered_total`
 - `wishlist_created_total`
 - `wishlist_item_added_total`
@@ -87,56 +105,67 @@ docker compose up --build
 - `outbox_events_published_total`
 - `inbox_events_consumed_total`
 
-## Lab 2 Checklist
-| Block | Item | Status |
+## Чеклист лабораторной работы
+
+| Блок | Требование | Статус |
 |---|---|---|
-| Block 1: Interservice Communication | 4+ microservices | Done |
-| Block 1: Interservice Communication | REST APIs | Done |
-| Block 1: Interservice Communication | sync HTTP calls | Done |
-| Block 1: Interservice Communication | RabbitMQ async communication | Done |
-| Block 1: Interservice Communication | API Gateway | Done |
-| Block 2: Data and Consistency | database per service | Done |
-| Block 2: Data and Consistency | migrations/bootstrapping | Done (EnsureCreated + schema bootstrap) |
-| Block 2: Data and Consistency | eventual consistency | Done |
-| Block 2: Data and Consistency | outbox pattern | Done |
-| Block 2: Data and Consistency | inbox pattern | Done |
-| Block 3: Resilience and Observability | JSON structured logs | Done |
-| Block 3: Resilience and Observability | health endpoints | Done |
-| Block 3: Resilience and Observability | graceful shutdown | Done (containerized hosted services) |
-| Block 3: Resilience and Observability | correlation ID | Done |
-| Block 3: Resilience and Observability | retry/timeout | Done |
-| Block 3: Resilience and Observability | Prometheus metrics | Done |
-| Block 3: Resilience and Observability | Grafana dashboard | Done |
-| Block 4: Security and Production | env vars | Done |
-| Block 4: Security and Production | docker-compose | Done |
-| Block 4: Security and Production | `.env` ignored | Done |
-| Block 4: Security and Production | `.env.example` | Done |
-| Block 4: Security and Production | Swagger/OpenAPI | Done |
-| Block 4: Security and Production | JWT authentication | Done |
+| Межсервисное взаимодействие | 4+ микросервиса | Готово |
+| Межсервисное взаимодействие | REST API | Готово |
+| Межсервисное взаимодействие | Синхронные HTTP-вызовы | Готово |
+| Межсервисное взаимодействие | Асинхронная коммуникация через RabbitMQ | Готово |
+| Межсервисное взаимодействие | API Gateway | Готово |
+| Данные и согласованность | Отдельная БД на сервис | Готово |
+| Данные и согласованность | Миграции/инициализация схемы | Готово: EF Core migrations |
+| Данные и согласованность | Eventual consistency | Готово |
+| Данные и согласованность | Outbox pattern | Готово |
+| Данные и согласованность | Inbox pattern | Готово |
+| Надежность и наблюдаемость | JSON structured logs | Готово |
+| Надежность и наблюдаемость | Health endpoints | Готово |
+| Надежность и наблюдаемость | Graceful shutdown | Готово: hosted services в контейнерах |
+| Надежность и наблюдаемость | Correlation ID | Готово |
+| Надежность и наблюдаемость | Retry/timeout | Готово |
+| Надежность и наблюдаемость | Prometheus metrics | Готово |
+| Надежность и наблюдаемость | Grafana dashboard | Готово |
+| Безопасность и production-настройки | Переменные окружения | Готово |
+| Безопасность и production-настройки | Docker Compose | Готово |
+| Безопасность и production-настройки | `.env` не хранится в Git | Готово |
+| Безопасность и production-настройки | `.env.example` | Готово |
+| Безопасность и production-настройки | Swagger/OpenAPI | Готово |
+| Безопасность и production-настройки | JWT authentication | Готово |
 
-## Troubleshooting
-### Ports already in use
-- Check conflicting ports (`3000`, `3001`, `8080`, `5001-5004`, `9090`, `15672`).
-- Stop conflicting processes or change host port mapping in `docker-compose.yml`.
+## Что делать при проблемах
 
-### Old database schema in Docker volumes
-- Recreate with:
+### Порты уже заняты
+
+Проверьте порты `3000`, `3001`, `8080`, `5001-5004`, `9090`, `15672`.
+Остановите конфликтующие процессы или поменяйте host port mapping в `docker-compose.yml`.
+
+### В Docker volumes осталась старая схема БД
+
+Пересоздайте volumes:
+
 ```bash
 docker compose down -v
 docker compose up --build
 ```
 
-### RabbitMQ not ready
-- Wait until `rabbitmq` is healthy and backend consumers reconnect automatically.
-- Check RabbitMQ UI at http://localhost:15672.
+### RabbitMQ еще не готов
 
-### Frontend cannot reach API Gateway
-- Verify frontend opens at `http://localhost:3001`.
-- Verify gateway health `http://localhost:8080/health`.
-- Ensure browser cache is refreshed after gateway config changes.
+Подождите, пока контейнер `rabbitmq` полностью поднимется. Backend consumer-сервисы переподключаются автоматически.
+Проверить RabbitMQ можно здесь: http://localhost:15672.
 
-## Environment Variables
-See `.env.example` for supported variables:
+### Frontend не видит API Gateway
+
+Проверьте:
+
+- frontend открыт на `http://localhost:3001`;
+- gateway отвечает на `http://localhost:8080/health`;
+- после изменения конфигурации gateway обновлен кэш браузера.
+
+## Переменные окружения
+
+Поддерживаемые переменные описаны в `.env.example`:
+
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`

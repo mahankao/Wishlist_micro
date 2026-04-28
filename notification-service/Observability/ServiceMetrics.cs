@@ -6,6 +6,7 @@ public static class ServiceMetrics
 {
     public const string ServiceName = "notification-service";
 
+    // Общие HTTP-метрики одинаковые во всех backend-сервисах, чтобы Grafana могла строить единые графики.
     public static readonly Counter HttpRequests = Metrics.CreateCounter(
         "http_requests_total",
         "Total number of HTTP requests.",
@@ -30,6 +31,7 @@ public static class ServiceMetrics
             LabelNames = ["service", "method", "path", "status_code"]
         });
 
+    // Бизнес-метрика растет только для новых событий, которые прошли inbox idempotency check.
     public static readonly Counter InboxEventsConsumed = Metrics.CreateCounter(
         "inbox_events_consumed_total",
         "Total number of consumed inbox events.");

@@ -70,6 +70,7 @@ type NotificationInboxEvent = {
 };
 
 function pretty(value: unknown): string {
+  // Debug-блоки в UI показывают сырой ответ backend-а, чтобы на защите было видно, что вернул API.
   try {
     return JSON.stringify(value, null, 2);
   } catch {
@@ -132,11 +133,13 @@ function App() {
   const [inboxDebug, setInboxDebug] = useState<unknown>(null);
 
   const publicLink = useMemo(() => {
+    // Public link удобен для копирования, а shareToken отдельно нужен форме публичного wishlist.
     if (!createdWishlist?.shareToken) return "";
     return `${API_BASE_URL.replace(/\/$/, "")}/wishlists/public/${createdWishlist.shareToken}`;
   }, [createdWishlist]);
 
   useEffect(() => {
+    // Если токен уже есть в localStorage, при открытии страницы сразу подгружаем текущего пользователя.
     if (token) {
       loadMe().catch(() => void 0);
     } else {
@@ -207,6 +210,7 @@ function App() {
         body: { title: wishlistTitle, description: wishlistDescription || null }
       });
       setCreatedWishlist(response);
+      // После создания wishlist сразу заполняем связанные поля для публичного доступа и чата.
       setWishlistLookupId(response.id);
       setPublicShareToken(response.shareToken);
       setChatWishlistId(response.id);
@@ -286,6 +290,7 @@ function App() {
       setPublicDebug(response);
       const first = response.items[0];
       if (first?.id) {
+        // Первый item автоматически выбирается для сценариев reserve и chat.
         setSelectedPublicItemId(first.id);
         setChatItemId(first.id);
       }
@@ -427,6 +432,7 @@ function App() {
       access_token: tokenValue
     });
 
+    // WebSocket нужен для live-чата; REST-отправка оставлена рядом как запасной и проверочный сценарий.
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -446,7 +452,7 @@ function App() {
         const message = JSON.parse(event.data) as ChatMessage;
         setChatMessages((prev) => [...prev, message]);
       } catch {
-        // Ignore malformed messages.
+        // Некорректные WebSocket-сообщения игнорируются, чтобы UI не падал из-за одного плохого payload.
       }
     };
   }

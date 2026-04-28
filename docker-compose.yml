@@ -1,4 +1,5 @@
 services:
+  # Frontend собирается с адресом API Gateway и отдается через Nginx.
   frontend:
     build:
       context: ./frontend
@@ -84,6 +85,7 @@ services:
       Outbox__BatchSize: 20
       Outbox__PollIntervalMilliseconds: 2000
     depends_on:
+      # Для outbox достаточно, чтобы RabbitMQ стартовал; worker сам повторит подключение при ошибке.
       wishlist-db:
         condition: service_healthy
       rabbitmq:
@@ -142,6 +144,7 @@ services:
       RabbitMq__Exchange: wishlist.events
       RabbitMq__Queue: notification.wishlist-events
     depends_on:
+      # Consumer тоже умеет переподключаться, поэтому здесь не требуется строгий RabbitMQ healthcheck.
       notification-db:
         condition: service_healthy
       rabbitmq:
@@ -258,6 +261,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  # Volumes сохраняют данные между перезапусками; для чистого старта используйте docker compose down -v.
   user-db-data:
   wishlist-db-data:
   chat-db-data:

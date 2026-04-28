@@ -11,6 +11,7 @@ public class CorrelationIdMiddleware(RequestDelegate next)
 
     public async Task Invoke(HttpContext context)
     {
+        // Если gateway уже прислал X-Correlation-ID, продолжаем использовать его; иначе создаем новый.
         var correlationId = context.Request.Headers[HeaderName].FirstOrDefault();
         if (string.IsNullOrWhiteSpace(correlationId))
         {
@@ -21,6 +22,7 @@ public class CorrelationIdMiddleware(RequestDelegate next)
         context.TraceIdentifier = correlationId;
         context.Response.OnStarting(() =>
         {
+            // Возвращаем correlationId клиенту, чтобы его можно было искать в логах.
             context.Response.Headers[HeaderName] = correlationId;
             return Task.CompletedTask;
         });

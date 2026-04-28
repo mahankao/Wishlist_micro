@@ -6,6 +6,7 @@ namespace ChatService.Realtime;
 
 public class ChatConnectionManager
 {
+    // Первый ключ - комната чата, второй ключ - конкретное WebSocket-подключение внутри комнаты.
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, WebSocket>> _rooms = new();
 
     public string AddConnection(string roomKey, WebSocket socket)
@@ -29,6 +30,7 @@ public class ChatConnectionManager
     {
         if (!_rooms.TryGetValue(roomKey, out var room)) return;
 
+        // Одно сообщение рассылается всем открытым сокетам комнаты.
         var bytes = Encoding.UTF8.GetBytes(payload);
         var segment = new ArraySegment<byte>(bytes);
 

@@ -9,6 +9,7 @@ public class RequestLoggingMiddleware(RequestDelegate next, ILogger<RequestLoggi
 
     public async Task Invoke(HttpContext context)
     {
+        // Замеряем длительность каждого HTTP-запроса и пишем итог одной JSON-записью.
         var startedAt = DateTime.UtcNow;
         var stopwatch = Stopwatch.StartNew();
         var method = context.Request.Method;
@@ -51,6 +52,7 @@ public class RequestLoggingMiddleware(RequestDelegate next, ILogger<RequestLoggi
 
     private static void WriteRequestMetrics(string method, string path, int statusCode, double elapsedSeconds)
     {
+        // Метки позволяют в Prometheus фильтровать запросы по сервису, пути, методу и статусу.
         var labels = new[] { ServiceMetrics.ServiceName, method, path, statusCode.ToString() };
         ServiceMetrics.HttpRequests.WithLabels(labels).Inc();
         ServiceMetrics.HttpRequestDuration.WithLabels(labels).Observe(elapsedSeconds);

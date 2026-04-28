@@ -6,6 +6,7 @@ public class CorrelationHeaderHandler(IHttpContextAccessor httpContextAccessor) 
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        // При исходящем HTTP-вызове прокидываем тот же correlationId в следующий сервис.
         if (!request.Headers.Contains(CorrelationIdMiddleware.HeaderName))
         {
             var correlationId = _httpContextAccessor.HttpContext?.Items[CorrelationIdMiddleware.ItemKey]?.ToString()

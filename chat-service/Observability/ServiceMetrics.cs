@@ -6,6 +6,7 @@ public static class ServiceMetrics
 {
     public const string ServiceName = "chat-service";
 
+    // Общие HTTP-метрики одинаковые во всех backend-сервисах, чтобы Grafana могла строить единые графики.
     public static readonly Counter HttpRequests = Metrics.CreateCounter(
         "http_requests_total",
         "Total number of HTTP requests.",
@@ -30,6 +31,7 @@ public static class ServiceMetrics
             LabelNames = ["service", "method", "path", "status_code"]
         });
 
+    // Бизнес-метрика считает отправленные сообщения REST и WebSocket-чата.
     public static readonly Counter ChatMessagesSent = Metrics.CreateCounter(
         "chat_messages_sent_total",
         "Total number of chat messages sent.");

@@ -21,6 +21,7 @@ public class OutboxPublisherHostedService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Worker работает постоянно: периодически берет неопубликованные события из БД и отправляет их в RabbitMQ.
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -43,6 +44,7 @@ public class OutboxPublisherHostedService(
 
     private async Task PublishPendingMessagesAsync(CancellationToken cancellationToken)
     {
+        // Подключение создается на итерацию, чтобы worker мог восстановиться после временного падения RabbitMQ.
         var factory = new ConnectionFactory
         {
             HostName = _rabbitMqOptions.Host,
@@ -65,6 +67,7 @@ public class OutboxPublisherHostedService(
         var db = scope.ServiceProvider.GetRequiredService<WishlistDbContext>();
         var batchSize = Math.Max(1, _outboxOptions.BatchSize);
 
+        // Берем старые события первыми, чтобы сохранять естественный порядок публикации.
         var pending = await db.OutboxMessages
             .Where(x => x.PublishedAtUtc == null)
             .OrderBy(x => x.OccurredAtUtc)
@@ -75,6 +78,7 @@ public class OutboxPublisherHostedService(
         {
             try
             {
+                // Persistent-сообщение переживает перезапуск RabbitMQ, если оно уже принято брокером.
                 var properties = channel.CreateBasicProperties();
                 properties.Persistent = true;
                 properties.ContentType = "application/json";
@@ -94,6 +98,7 @@ public class OutboxPublisherHostedService(
             }
             catch (Exception ex)
             {
+                // Ошибка остается в outbox-записи, а следующая итерация попробует отправить событие еще раз.
                 message.Attempts++;
                 message.LastError = ex.Message;
                 _logger.LogWarning(ex, "Failed to publish outbox message {MessageId} ({Type}).", message.Id, message.Type);

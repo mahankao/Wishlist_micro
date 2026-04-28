@@ -1,4 +1,5 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+// JWT хранится локально только для demo UI, чтобы пользователь не вводил логин после перезагрузки страницы.
 const TOKEN_KEY = "wishlist_demo_access_token";
 
 export class ApiError extends Error {
@@ -31,6 +32,7 @@ export function clearToken(): void {
 }
 
 export function buildWsUrl(path: string, query: Record<string, string>): string {
+  // WebSocket использует тот же gateway, только схема http/https заменяется на ws/wss.
   const base = API_BASE_URL.replace(/^http/i, "ws").replace(/\/$/, "");
   const url = new URL(`${base}${path}`);
   Object.entries(query).forEach(([k, v]) => url.searchParams.set(k, v));
@@ -38,12 +40,14 @@ export function buildWsUrl(path: string, query: Record<string, string>): string 
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // Общая обертка над fetch добавляет JSON headers, JWT и нормальную ошибку для UI.
   const url = `${API_BASE_URL.replace(/\/$/, "")}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
   };
 
   if (options.auth !== false) {
+    // Для публичных endpoints можно передать auth: false, тогда Authorization header не отправляется.
     const token = getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
   }
@@ -59,6 +63,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   const payload = isJson ? await response.json().catch(() => null) : await response.text().catch(() => "");
 
   if (!response.ok) {
+    // Backend обычно возвращает { error }, но fallback оставлен для любых HTTP-ошибок.
     const serverError = typeof payload === "object" && payload && "error" in payload
       ? String((payload as { error?: unknown }).error ?? "")
       : "";

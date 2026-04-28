@@ -6,6 +6,7 @@ public static class ServiceMetrics
 {
     public const string ServiceName = "wishlist-service";
 
+    // Общие HTTP-метрики одинаковые во всех backend-сервисах, чтобы Grafana могла строить единые графики.
     public static readonly Counter HttpRequests = Metrics.CreateCounter(
         "http_requests_total",
         "Total number of HTTP requests.",
@@ -30,6 +31,7 @@ public static class ServiceMetrics
             LabelNames = ["service", "method", "path", "status_code"]
         });
 
+    // Бизнес-метрики отражают ключевые действия пользователя в wishlist flow.
     public static readonly Counter WishlistsCreated = Metrics.CreateCounter(
         "wishlist_created_total",
         "Total number of created wishlists.");
