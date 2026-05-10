@@ -4,7 +4,7 @@ namespace ChatService.Integration;
 
 public record WishlistItemLite(Guid Id);
 
-public record PublicWishlistLite(IReadOnlyList<WishlistItemLite> Items);
+public record PublicWishlistLite(Guid Id, IReadOnlyList<WishlistItemLite> Items);
 
 public enum RoomValidationResult
 {
@@ -13,12 +13,14 @@ public enum RoomValidationResult
     Unavailable
 }
 
+public record RoomValidation(RoomValidationResult Result, Guid? WishlistId = null);
+
 public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServiceOptions> options)
 {
     private readonly HttpClient _httpClient = httpClient;
     private readonly WishlistServiceOptions _options = options.Value;
 
-    public async Task<RoomValidationResult> ValidateRoomAsync(Guid shareToken, Guid itemId, CancellationToken cancellationToken = default)
+    public async Task<RoomValidation> ValidateRoomAsync(Guid shareToken, Guid itemId, CancellationToken cancellationToken = default)
     {
         var retries = Math.Max(0, _options.RetryCount);
         for (var attempt = 0; attempt <= retries; attempt++)
@@ -28,7 +30,7 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
             try
             {
                 var response = await _httpClient.GetAsync($"/wishlists/public/{shareToken}", linkedCts.Token);
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return RoomValidationResult.NotFound;
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return new RoomValidation(RoomValidationResult.NotFound);
                 if (!response.IsSuccessStatusCode)
                 {
                     // Retry on transient non-success.
@@ -36,8 +38,10 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
                 else
                 {
                     var payload = await response.Content.ReadFromJsonAsync<PublicWishlistLite>(cancellationToken: linkedCts.Token);
-                    if (payload is null) return RoomValidationResult.Unavailable;
-                    return payload.Items.Any(x => x.Id == itemId) ? RoomValidationResult.Valid : RoomValidationResult.NotFound;
+                    if (payload is null) return new RoomValidation(RoomValidationResult.Unavailable);
+                    return payload.Items.Any(x => x.Id == itemId)
+                        ? new RoomValidation(RoomValidationResult.Valid, payload.Id)
+                        : new RoomValidation(RoomValidationResult.NotFound);
                 }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
@@ -49,6 +53,6 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
             }
         }
 
-        return RoomValidationResult.Unavailable;
+        return new RoomValidation(RoomValidationResult.Unavailable);
     }
 }
