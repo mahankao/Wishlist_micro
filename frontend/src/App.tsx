@@ -52,6 +52,8 @@ type MyReservation = {
 
 type ChatMessage = {
   id: string;
+  senderUserId: string;
+  senderDisplayName: string;
   author: string;
   text: string;
   createdAtUtc: string;
@@ -621,7 +623,7 @@ function App() {
           <ul>
             {chatMessages.map((m) => (
               <li key={m.id}>
-                {m.createdAtUtc} | {m.isMine ? "me" : m.author}: {m.text}
+                {m.createdAtUtc} | {m.isMine ? "me" : (m.senderDisplayName || m.author)}: {m.text}
               </li>
             ))}
           </ul>

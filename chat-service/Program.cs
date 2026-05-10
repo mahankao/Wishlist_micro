@@ -113,6 +113,7 @@ builder.Services.AddHttpClient<WishlistServiceClient>((serviceProvider, client) 
 builder.Services.AddSingleton<ChatConnectionManager>();
 
 var app = builder.Build();
+var webSocketJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -147,14 +148,16 @@ app.MapGet("/chat/messages", async (
 
     // Перед чтением истории проверяем, что пользователь и item существуют.
     var accessCheck = await EnsureAccessAsync(userId.Value, shareToken, itemId, userServiceClient, wishlistServiceClient, cancellationToken);
-    if (accessCheck is not null) return accessCheck;
+    if (accessCheck.Error is not null) return accessCheck.Error;
+    if (accessCheck.WishlistId != wishlistId) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    var messages = await db.ChatMessages
+    var chatMessages = await db.ChatMessages
         .Where(x => x.WishlistId == wishlistId && x.ItemId == itemId)
         .OrderBy(x => x.CreatedAtUtc)
         .Take(200)
-        .Select(x => new ChatMessageResponse(x.Id, "anonymous", x.Text, x.CreatedAtUtc, x.SenderUserId == userId.Value))
         .ToListAsync(cancellationToken);
+    var displayNames = await LoadDisplayNamesAsync(chatMessages.Select(x => x.SenderUserId), userServiceClient, cancellationToken);
+    var messages = chatMessages.Select(x => ToResponse(x, userId.Value, displayNames)).ToList();
 
     return Results.Ok(messages);
 })
@@ -180,11 +183,12 @@ app.MapPost("/chat/messages", async (
     }
 
     var accessCheck = await EnsureAccessAsync(userId.Value, request.ShareToken, request.ItemId, userServiceClient, wishlistServiceClient, cancellationToken);
-    if (accessCheck is not null) return accessCheck;
+    if (accessCheck.Error is not null) return accessCheck.Error;
+    if (accessCheck.WishlistId != request.WishlistId) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
     var message = new ChatMessage
     {
-        WishlistId = request.WishlistId,
+        WishlistId = accessCheck.WishlistId.Value,
         ItemId = request.ItemId,
         SenderUserId = userId.Value,
         Text = text
@@ -193,7 +197,8 @@ app.MapPost("/chat/messages", async (
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.ChatMessagesSent.Inc();
 
-    return Results.Ok(new ChatMessageResponse(message.Id, "anonymous", message.Text, message.CreatedAtUtc, true));
+    var displayNames = new Dictionary<Guid, string> { [userId.Value] = GetDisplayName(principal) };
+    return Results.Ok(ToResponse(message, userId.Value, displayNames));
 })
 .RequireAuthorization()
 .WithTags("Chat");
@@ -230,14 +235,19 @@ app.Map("/chat/ws", async (
     }
 
     var accessCheck = await EnsureAccessAsync(userId.Value, shareToken, itemId, userServiceClient, wishlistServiceClient, context.RequestAborted);
-    if (accessCheck is IResult denied)
+    if (accessCheck.Error is IResult denied)
     {
         await denied.ExecuteAsync(context);
         return;
     }
+    if (accessCheck.WishlistId != wishlistId)
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        return;
+    }
 
     var socket = await context.WebSockets.AcceptWebSocketAsync();
-    var roomKey = $"{wishlistId:N}:{itemId:N}";
+    var roomKey = $"{accessCheck.WishlistId.Value:N}:{itemId:N}";
     // Комната строится по wishlistId и itemId: все подключения к одному подарку получают общие сообщения.
     var connectionId = connectionManager.AddConnection(roomKey, socket);
     var buffer = new byte[4 * 1024];
@@ -254,7 +264,7 @@ app.Map("/chat/ws", async (
             WsIncomingMessage? incoming;
             try
             {
-                incoming = JsonSerializer.Deserialize<WsIncomingMessage>(text);
+                incoming = JsonSerializer.Deserialize<WsIncomingMessage>(text, webSocketJsonOptions);
             }
             catch
             {
@@ -266,7 +276,7 @@ app.Map("/chat/ws", async (
 
             var message = new ChatMessage
             {
-                WishlistId = wishlistId,
+                WishlistId = accessCheck.WishlistId.Value,
                 ItemId = itemId,
                 SenderUserId = userId.Value,
                 Text = payloadText
@@ -276,11 +286,18 @@ app.Map("/chat/ws", async (
             ServiceMetrics.ChatMessagesSent.Inc();
 
             var outgoing = JsonSerializer.Serialize(
-                new ChatMessageResponse(message.Id, "anonymous", message.Text, message.CreatedAtUtc, false)
+                ToResponse(
+                    message,
+                    Guid.Empty,
+                    new Dictionary<Guid, string> { [userId.Value] = GetDisplayName(principal) }
+                ),
+                webSocketJsonOptions
             );
             await connectionManager.BroadcastAsync(roomKey, outgoing, context.RequestAborted);
         }
     }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+    catch (WebSocketException) { }
     finally
     {
         connectionManager.RemoveConnection(roomKey, connectionId);
@@ -303,7 +320,51 @@ static Guid? GetUserId(ClaimsPrincipal principal)
     return Guid.TryParse(raw, out var userId) ? userId : null;
 }
 
-static async Task<IResult?> EnsureAccessAsync(
+static string GetDisplayName(ClaimsPrincipal principal) =>
+    principal.FindFirstValue("display_name")
+    ?? principal.FindFirstValue(ClaimTypes.Name)
+    ?? "anonymous";
+
+static ChatMessageResponse ToResponse(
+    ChatMessage message,
+    Guid currentUserId,
+    IReadOnlyDictionary<Guid, string> displayNames)
+{
+    var senderDisplayName = displayNames.TryGetValue(message.SenderUserId, out var displayName) &&
+                            !string.IsNullOrWhiteSpace(displayName)
+        ? displayName
+        : "anonymous";
+
+    return new ChatMessageResponse(
+        message.Id,
+        message.SenderUserId,
+        senderDisplayName,
+        senderDisplayName,
+        message.Text,
+        message.CreatedAtUtc,
+        message.SenderUserId == currentUserId
+    );
+}
+
+static async Task<Dictionary<Guid, string>> LoadDisplayNamesAsync(
+    IEnumerable<Guid> userIds,
+    UserServiceClient userServiceClient,
+    CancellationToken cancellationToken)
+{
+    var displayNames = new Dictionary<Guid, string>();
+    foreach (var userId in userIds.Distinct())
+    {
+        var user = await userServiceClient.GetUserAsync(userId, cancellationToken);
+        if (user is not null)
+        {
+            displayNames[userId] = user.DisplayName;
+        }
+    }
+
+    return displayNames;
+}
+
+static async Task<(IResult? Error, Guid? WishlistId)> EnsureAccessAsync(
     Guid userId,
     Guid shareToken,
     Guid itemId,
@@ -312,14 +373,14 @@ static async Task<IResult?> EnsureAccessAsync(
     CancellationToken cancellationToken)
 {
     var userLookup = await userServiceClient.UserExistsAsync(userId, cancellationToken);
-    if (userLookup == UserLookupResult.NotFound) return Results.NotFound(new { error = "User not found." });
-    if (userLookup == UserLookupResult.Unavailable) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    if (userLookup == UserLookupResult.NotFound) return (Results.NotFound(new { error = "User not found." }), null);
+    if (userLookup == UserLookupResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null);
 
     var roomLookup = await wishlistServiceClient.ValidateRoomAsync(shareToken, itemId, cancellationToken);
-    if (roomLookup == RoomValidationResult.NotFound) return Results.NotFound(new { error = "Chat room not found." });
-    if (roomLookup == RoomValidationResult.Unavailable) return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    if (roomLookup.Result == RoomValidationResult.NotFound) return (Results.NotFound(new { error = "Chat room not found." }), null);
+    if (roomLookup.Result == RoomValidationResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null);
 
-    return null;
+    return (null, roomLookup.WishlistId);
 }
 
 static async Task MigrateDatabaseAsync(IServiceProvider services)

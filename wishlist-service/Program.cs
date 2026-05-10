@@ -244,6 +244,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
     // Владелец не резервирует собственный подарок; резервирование предназначено для другого пользователя.
     var item = await db.WishlistItems
         .Include(x => x.Wishlist)
+        .AsNoTracking()
         .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
     if (item is null) return Results.NotFound(new { error = "Wishlist item not found." });
 
@@ -254,11 +255,45 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
 
     if (item.ReservedByUserId is not null && item.ReservedByUserId != reserverUserId.Value)
     {
-        return Results.Conflict(new { error = "Item already reserved by another user." });
+        return Results.Conflict(new { error = "Item is already reserved" });
     }
 
-    item.ReservedByUserId = reserverUserId.Value;
-    item.ReservedAtUtc ??= DateTime.UtcNow;
+    // Repeating reserve by the same user is idempotent: return OK and do not enqueue another event.
+    if (item.ReservedByUserId == reserverUserId.Value)
+    {
+        return Results.Ok(ToItemResponse(item));
+    }
+
+    var reservedAtUtc = DateTime.UtcNow;
+
+    await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
+
+    var updatedRows = await db.WishlistItems
+        .Where(x => x.WishlistId == wishlistId && x.Id == itemId && x.ReservedByUserId == null)
+        .ExecuteUpdateAsync(updates => updates
+            .SetProperty(x => x.ReservedByUserId, reserverUserId.Value)
+            .SetProperty(x => x.ReservedAtUtc, reservedAtUtc), cancellationToken);
+
+    if (updatedRows == 0)
+    {
+        await transaction.RollbackAsync(cancellationToken);
+
+        var currentItem = await db.WishlistItems
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
+
+        if (currentItem is null)
+        {
+            return Results.NotFound(new { error = "Wishlist item not found." });
+        }
+
+        if (currentItem.ReservedByUserId == reserverUserId.Value)
+        {
+            return Results.Ok(ToItemResponse(currentItem));
+        }
+
+        return Results.Conflict(new { error = "Item is already reserved" });
+    }
 
     // Событие сохраняется в той же транзакции, что и изменение item: это outbox pattern.
     EnqueueOutboxEvent(
@@ -270,10 +305,14 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
             item.Id,
             item.Wishlist.OwnerUserId,
             reserverUserId.Value,
-            DateTime.UtcNow));
+            reservedAtUtc));
 
     await db.SaveChangesAsync(cancellationToken);
+    await transaction.CommitAsync(cancellationToken);
     ServiceMetrics.WishlistItemsReserved.Inc();
+
+    item.ReservedByUserId = reserverUserId.Value;
+    item.ReservedAtUtc = reservedAtUtc;
 
     return Results.Ok(ToItemResponse(item));
 })
