@@ -28,6 +28,7 @@ public record WishlistResponse(
 
 public record PublicWishlistResponse(
     Guid Id,
+    Guid OwnerUserId,
     string Title,
     string? Description,
     IReadOnlyList<WishlistItemResponse> Items

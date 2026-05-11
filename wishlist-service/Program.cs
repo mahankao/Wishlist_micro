@@ -512,6 +512,7 @@ static WishlistResponse ToWishlistResponse(Wishlist wishlist) =>
 static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
     new(
         wishlist.Id,
+        wishlist.OwnerUserId,
         wishlist.Title,
         wishlist.Description,
         wishlist.Items
