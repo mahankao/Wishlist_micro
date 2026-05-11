@@ -2,12 +2,13 @@ namespace WishlistService.Contracts;
 
 public record CreateWishlistRequest(string Title, string? Description);
 
-public record AddWishlistItemRequest(string Title, string? Url, decimal? Price, string? Comment);
+public record AddWishlistItemRequest(string Title, string? Url, string? ImageUrl, decimal? Price, string? Comment);
 
 public record WishlistItemResponse(
     Guid Id,
     string Title,
     string? Url,
+    string? ImageUrl,
     decimal? Price,
     string? Comment,
     bool IsReserved,

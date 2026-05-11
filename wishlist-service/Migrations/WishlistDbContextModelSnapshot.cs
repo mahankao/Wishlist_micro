@@ -111,6 +111,10 @@ namespace WishlistService.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("ImageUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<decimal?>("Price")
                         .HasColumnType("numeric(12,2)");
 
