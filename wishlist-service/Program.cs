@@ -156,6 +156,25 @@ app.MapPost("/wishlists", async (
 .RequireAuthorization()
 .WithTags("Wishlists");
 
+app.MapGet("/wishlists", async (
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var wishlists = await db.Wishlists
+        .Include(x => x.Items.OrderBy(i => i.CreatedAtUtc))
+        .Where(x => x.OwnerUserId == ownerUserId.Value)
+        .OrderByDescending(x => x.CreatedAtUtc)
+        .ToListAsync(cancellationToken);
+
+    return Results.Ok(wishlists.Select(ToWishlistResponse).ToList());
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
 app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     Guid wishlistId,
     AddWishlistItemRequest request,

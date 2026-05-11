@@ -36,6 +36,8 @@ type WishlistResponse = {
   items: WishlistItem[];
 };
 
+type WishlistSummary = WishlistResponse;
+
 type PublicWishlistResponse = {
   id: string;
   title: string;
@@ -79,6 +81,22 @@ type ConversationTarget = {
 
 const defaultPhoto =
   "https://images.unsplash.com/photo-1513201099705-a9746e1e201f?auto=format&fit=crop&w=900&q=80";
+
+function explainError(error: unknown, fallback = "Не получилось выполнить действие. Попробуйте ещё раз."): string {
+  const rawMessage = error instanceof Error ? error.message : String(error || "");
+  if (!rawMessage) return fallback;
+  if (rawMessage.includes("Failed to fetch")) return "Сервис временно недоступен. Проверьте, что backend запущен, и попробуйте снова.";
+  if (rawMessage.includes("401") || rawMessage.includes("Unauthorized")) return "Войдите в аккаунт, чтобы выполнить это действие.";
+  if (rawMessage.includes("403") || rawMessage.includes("Forbidden")) return "У вас нет доступа к этому действию.";
+  if (rawMessage.includes("already reserved")) return "Этот подарок уже забронирован другим пользователем.";
+  if (rawMessage.includes("Invalid registration payload")) return "Проверьте имя, email и пароль. Пароль должен быть не короче 8 символов.";
+  if (rawMessage.includes("Invalid login payload")) return "Введите email и пароль.";
+  if (rawMessage.includes("Invalid credentials")) return "Неверный email или пароль.";
+  if (rawMessage.includes("Wishlist not found")) return "Wishlist не найден. Проверьте ссылку.";
+  if (rawMessage.includes("Title is required")) return "Введите название подарка. Оно обязательно.";
+  if (rawMessage.includes("Url must") || rawMessage.includes("ImageUrl must")) return "Ссылка должна начинаться с http:// или https://.";
+  return rawMessage;
+}
 
 function formatPrice(value?: number | null): string {
   if (value === null || value === undefined) return "Цена не указана";
@@ -141,6 +159,8 @@ function App() {
   const [wishlistTitle, setWishlistTitle] = useState("");
   const [wishlistDescription, setWishlistDescription] = useState("");
   const [createdWishlist, setCreatedWishlist] = useState<WishlistResponse | null>(null);
+  const [myWishlists, setMyWishlists] = useState<WishlistSummary[]>([]);
+  const [libraryTab, setLibraryTab] = useState<"created" | "giving">("created");
   const [wishlistMessage, setWishlistMessage] = useState("");
   const [wishlistError, setWishlistError] = useState("");
 
@@ -195,10 +215,17 @@ function App() {
 
   useEffect(() => {
     if (me && !isPublicRoute) {
+      loadMyWishlists().catch(() => void 0);
       loadReservations().catch(() => void 0);
       loadInbox().catch(() => void 0);
     }
   }, [me, isPublicRoute]);
+
+  useEffect(() => {
+    if (token && conversation) {
+      loadChatMessages(conversation.wishlistId, conversation.itemId, conversation.shareToken).catch(() => void 0);
+    }
+  }, [token, conversation?.wishlistId, conversation?.itemId]);
 
   async function loadMe() {
     const response = await apiRequest<UserDto>("/users/me");
@@ -215,11 +242,19 @@ function App() {
         auth: false,
         body: { email: registerEmail, password: registerPassword, displayName: registerDisplayName }
       });
-      setAuthMode("login");
+      const response = await apiRequest<AuthResponse>("/auth/login", {
+        method: "POST",
+        auth: false,
+        body: { email: registerEmail, password: registerPassword }
+      });
+      setToken(response.accessToken);
+      setTokenState(response.accessToken);
+      setMe(response.user);
       setLoginEmail(registerEmail);
-      setAuthMessage("Аккаунт создан. Теперь войдите.");
+      setAuthMode("login");
+      setAuthMessage("Аккаунт создан, вы уже вошли.");
     } catch (error) {
-      setAuthError((error as Error).message);
+      setAuthError(explainError(error));
     }
   }
 
@@ -238,7 +273,7 @@ function App() {
       setMe(response.user);
       setAuthMessage("Вы вошли.");
     } catch (error) {
-      setAuthError((error as Error).message);
+      setAuthError(explainError(error));
     }
   }
 
@@ -263,9 +298,10 @@ function App() {
         }
       });
       setCreatedWishlist(response);
+      setMyWishlists((prev) => [response, ...prev.filter((wishlist) => wishlist.id !== response.id)]);
       setWishlistMessage("Wishlist готов. Добавьте подарки и отправьте ссылку друзьям.");
     } catch (error) {
-      setWishlistError((error as Error).message);
+      setWishlistError(explainError(error));
     }
   }
 
@@ -297,13 +333,22 @@ function App() {
       setItemComment("");
       setWishlistMessage("Подарок добавлен.");
     } catch (error) {
-      setWishlistError((error as Error).message);
+      setWishlistError(explainError(error));
     }
   }
 
   async function loadMyWishlist(wishlistId: string) {
     const response = await apiRequest<WishlistResponse>(`/wishlists/${wishlistId}`);
     setCreatedWishlist(response);
+    setMyWishlists((prev) => prev.map((wishlist) => wishlist.id === response.id ? response : wishlist));
+  }
+
+  async function loadMyWishlists() {
+    const response = await apiRequest<WishlistSummary[]>("/wishlists");
+    setMyWishlists(response);
+    if (!createdWishlist && response[0]) {
+      setCreatedWishlist(response[0]);
+    }
   }
 
   async function copyPublicLink() {
@@ -332,14 +377,14 @@ function App() {
       const firstAvailable = response.items.find((item) => !item.isReserved) ?? response.items[0];
       setSelectedPublicItemId(firstAvailable?.id || "");
     } catch (error) {
-      setPublicError((error as Error).message);
+      setPublicError(explainError(error));
     }
   }
 
   async function reserveItem(itemId: string) {
     if (!publicWishlist) return;
     if (!token) {
-      setPublicError("Войдите или зарегистрируйтесь, чтобы забронировать подарок.");
+      setPublicError("Войдите или зарегистрируйтесь, чтобы забронировать подарок. Так владелец увидит, что подарок уже выбран.");
       return;
     }
 
@@ -351,7 +396,7 @@ function App() {
       await loadPublicWishlist(publicShareToken);
       await loadReservations();
     } catch (error) {
-      setPublicError((error as Error).message);
+      setPublicError(explainError(error, "Не получилось забронировать подарок."));
     }
   }
 
@@ -399,7 +444,7 @@ function App() {
       const response = await apiRequest<ChatMessage[]>(`/chat/messages?${query.toString()}`);
       setChatMessages(response);
     } catch (error) {
-      setChatError((error as Error).message);
+      setChatError(explainError(error, "Не получилось загрузить сообщения."));
     }
   }
 
@@ -407,7 +452,7 @@ function App() {
     e.preventDefault();
     if (!conversation) return;
     if (!token) {
-      setChatError("Войдите, чтобы задать вопрос или ответить.");
+      setChatError("Войдите или зарегистрируйтесь, чтобы задать вопрос по подарку.");
       return;
     }
 
@@ -428,7 +473,7 @@ function App() {
       setChatMessage("Сообщение отправлено.");
       await loadInbox();
     } catch (error) {
-      setChatError((error as Error).message);
+      setChatError(explainError(error, "Не получилось отправить сообщение."));
     }
   }
 
@@ -440,7 +485,7 @@ function App() {
         <p className="muted">
           {authMode === "login"
             ? "Авторизация нужна для создания wishlist, бронирования и вопросов."
-            : "После регистрации вы сможете создать wishlist и поделиться им."}
+            : "После регистрации вы сразу попадёте в аккаунт."}
         </p>
       </div>
 
@@ -517,9 +562,10 @@ function App() {
     return (
       <div className="app-shell public-page">
         <header className="topbar">
-          <a className="brand" href="/">WishNest</a>
+          <a className="brand" href="/">wishlist service</a>
           <div className="topbar-actions">
             {me ? <span className="user-pill">{me.displayName || me.email}</span> : <a className="secondary-link" href="#auth">Войти</a>}
+            {me && <a className="button secondary small" href="/">Мои вишлисты</a>}
             {me && <button className="secondary small" onClick={handleLogout}>Выйти</button>}
           </div>
         </header>
@@ -578,14 +624,10 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="/">WishNest</a>
-        <nav>
-          <a href="#create">Создать wishlist</a>
-          <a href="#open">Открыть ссылку</a>
-          <a href="#questions">Вопросы</a>
-        </nav>
+        <a className="brand" href="/">wishlist service</a>
         <div className="topbar-actions">
           {me ? <span className="user-pill">{me.displayName || me.email}</span> : <a className="secondary-link" href="#auth">Войти</a>}
+          {me && <a className="button secondary small" href="#my-wishlists" onClick={() => loadMyWishlists().catch(() => void 0)}>Мои вишлисты</a>}
           {me && <button className="secondary small" onClick={handleLogout}>Выйти</button>}
         </div>
       </header>
@@ -593,7 +635,7 @@ function App() {
       <main className="page">
         <section className="hero">
           <div className="hero-copy">
-            <p className="eyebrow">Gift-сервис для точных подарков</p>
+            <p className="eyebrow">wishlist service</p>
             <h1>Wishlist, которым удобно делиться</h1>
             <p>
               Создайте список желаний, добавьте фото, ссылки и детали подарков. Друзья откроют ссылку, выберут подарок и зададут вопрос, если нужно уточнение.
@@ -630,6 +672,58 @@ function App() {
         {me && (
           <section id="create" className="dashboard">
             <div className="dashboard-main">
+              <section id="my-wishlists" className="panel library-panel">
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Мои вишлисты</p>
+                    <h2>Ваши списки и подарки</h2>
+                  </div>
+                  <div className="segmented-control" aria-label="Разделы моих вишлистов">
+                    <button
+                      className={libraryTab === "created" ? "active" : ""}
+                      onClick={() => setLibraryTab("created")}
+                      type="button"
+                    >
+                      Я создал
+                    </button>
+                    <button
+                      className={libraryTab === "giving" ? "active" : ""}
+                      onClick={() => setLibraryTab("giving")}
+                      type="button"
+                    >
+                      Я дарю
+                    </button>
+                  </div>
+                </div>
+
+                {libraryTab === "created" ? (
+                  <div className="compact-list">
+                    {myWishlists.map((wishlist) => (
+                      <article key={wishlist.id}>
+                        <div>
+                          <strong>{wishlist.title}</strong>
+                          <span>{wishlist.items.length} подарков</span>
+                        </div>
+                        <button className="secondary small" onClick={() => setCreatedWishlist(wishlist)}>Открыть</button>
+                      </article>
+                    ))}
+                    {myWishlists.length === 0 && <p className="empty">Вы ещё не создавали wishlist.</p>}
+                  </div>
+                ) : (
+                  <div className="compact-list">
+                    {reservations.map((reservation) => (
+                      <article key={reservation.itemId}>
+                        <div>
+                          <strong>{reservation.itemTitle}</strong>
+                          <span>{reservation.wishlistTitle}</span>
+                        </div>
+                      </article>
+                    ))}
+                    {reservations.length === 0 && <p className="empty">Вы пока не выбрали подарки для друзей.</p>}
+                  </div>
+                )}
+              </section>
+
               <section className="panel">
                 <div className="panel-heading">
                   <div>

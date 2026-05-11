@@ -124,7 +124,7 @@ h3 {
   z-index: 20;
   min-height: 72px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr;
   align-items: center;
   gap: 22px;
   padding: 14px clamp(16px, 4vw, 48px);
@@ -179,6 +179,29 @@ h3 {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: 4px;
+  border: 1px solid #dacfc0;
+  border-radius: 8px;
+  padding: 4px;
+  background: #fbf7ef;
+}
+
+.segmented-control button {
+  min-height: 36px;
+  border-radius: 6px;
+  background: transparent;
+  color: #53615d;
+  box-shadow: none;
+}
+
+.segmented-control button.active {
+  background: #ffffff;
+  color: #24312f;
+  box-shadow: 0 6px 14px rgba(55, 70, 64, 0.08);
 }
 
 .user-pill {
@@ -540,8 +563,18 @@ input::placeholder {
 }
 
 .compact-list article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.compact-list article > div {
   display: grid;
   gap: 4px;
+}
+
+.compact-list article {
   border-radius: 8px;
   padding: 12px;
   background: #fbf7ef;
@@ -586,6 +619,14 @@ input::placeholder {
 
   .topbar-actions {
     justify-content: flex-start;
+  }
+
+  .segmented-control {
+    width: 100%;
+  }
+
+  .segmented-control button {
+    flex: 1;
   }
 
   .hero,
