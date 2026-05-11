@@ -80,6 +80,25 @@ function pretty(value: unknown): string {
   }
 }
 
+function formatPrice(value?: number | null): string {
+  if (value === null || value === undefined) return "Цена не указана";
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency: "RUB",
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+function formatDate(value?: string | null): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
 function App() {
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
@@ -139,6 +158,22 @@ function App() {
     if (!createdWishlist?.shareToken) return "";
     return `${API_BASE_URL.replace(/\/$/, "")}/wishlists/public/${createdWishlist.shareToken}`;
   }, [createdWishlist]);
+
+  const selectedPublicItem = useMemo(() => {
+    return publicWishlist?.items.find((item) => item.id === selectedPublicItemId) ?? null;
+  }, [publicWishlist, selectedPublicItemId]);
+
+  const selectedChatItem = useMemo(() => {
+    return publicWishlist?.items.find((item) => item.id === chatItemId)
+      ?? createdWishlist?.items.find((item) => item.id === chatItemId)
+      ?? null;
+  }, [createdWishlist, publicWishlist, chatItemId]);
+
+  async function copyPublicLink() {
+    if (!publicLink) return;
+    await navigator.clipboard.writeText(publicLink);
+    setWishlistSectionSuccess("Публичная ссылка скопирована.");
+  }
 
   useEffect(() => {
     // Если токен уже есть в localStorage, при открытии страницы сразу подгружаем текущего пользователя.
@@ -480,172 +515,414 @@ function App() {
   }
 
   return (
-    <div className="page">
-      <h1>WishList Demo Frontend</h1>
-      <p className="subtle">API base: {API_BASE_URL}</p>
-
-      <section>
-        <h2>1. Auth</h2>
-        <div className="grid">
-          <form onSubmit={handleRegister}>
-            <h3>Register</h3>
-            <input placeholder="email" value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} />
-            <input placeholder="password" type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} />
-            <input placeholder="displayName" value={registerDisplayName} onChange={(e) => setRegisterDisplayName(e.target.value)} />
-            <button type="submit">Register</button>
-          </form>
-
-          <form onSubmit={handleLogin}>
-            <h3>Login</h3>
-            <input placeholder="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
-            <input placeholder="password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
-            <button type="submit">Login</button>
-            <button type="button" className="secondary" onClick={handleLogout}>Logout</button>
-          </form>
+    <div className="app-shell">
+      <header className="topbar">
+        <a className="brand" href="#home" aria-label="Wishlist home">
+          <span className="brand-mark">W</span>
+          WishNest
+        </a>
+        <nav className="nav-links" aria-label="Основная навигация">
+          <a href="#create">Создать</a>
+          <a href="#public">Публичный список</a>
+          <a href="#chat">Вопросы</a>
+        </nav>
+        <div className="user-chip">
+          {me ? `${me.displayName || "Пользователь"} · ${me.email}` : "Гость"}
         </div>
-        <div className="status ok">{authSuccess}</div>
-        <div className="status error">{authError}</div>
-        <div className="status">Current user: {me ? `${me.displayName} (${me.email})` : "not logged in"}</div>
-        <pre>{pretty(authDebug)}</pre>
-      </section>
+      </header>
 
-      <section>
-        <h2>2. My Wishlist</h2>
-        <form onSubmit={handleCreateWishlist}>
-          <input placeholder="title" value={wishlistTitle} onChange={(e) => setWishlistTitle(e.target.value)} />
-          <input placeholder="description" value={wishlistDescription} onChange={(e) => setWishlistDescription(e.target.value)} />
-          <button type="submit">Create Wishlist</button>
-        </form>
-
-        <form onSubmit={handleAddItem}>
-          <h3>Add Item</h3>
-          <input placeholder="title" value={itemTitle} onChange={(e) => setItemTitle(e.target.value)} />
-          <input placeholder="url" value={itemUrl} onChange={(e) => setItemUrl(e.target.value)} />
-          <input placeholder="price" value={itemPrice} onChange={(e) => setItemPrice(e.target.value)} />
-          <input placeholder="comment" value={itemComment} onChange={(e) => setItemComment(e.target.value)} />
-          <button type="submit">Add Item</button>
-        </form>
-
-        <div className="row">
-          <input
-            placeholder="wishlistId for GET /wishlists/{id}"
-            value={wishlistLookupId}
-            onChange={(e) => setWishlistLookupId(e.target.value)}
-          />
-          <button onClick={() => loadMyWishlist()}>Load My Wishlist</button>
-        </div>
-
-        {createdWishlist && (
-          <div className="info">
-            <div><b>id:</b> {createdWishlist.id}</div>
-            <div><b>title:</b> {createdWishlist.title}</div>
-            <div><b>shareToken:</b> {createdWishlist.shareToken}</div>
-            <div><b>public link:</b> {publicLink}</div>
-          </div>
-        )}
-
-        <div className="status ok">{wishlistSectionSuccess}</div>
-        <div className="status error">{wishlistSectionError}</div>
-        <pre>{pretty(wishlistDebug)}</pre>
-      </section>
-
-      <section>
-        <h2>3. Public Wishlist + Reserve</h2>
-        <div className="row">
-          <input placeholder="share token" value={publicShareToken} onChange={(e) => setPublicShareToken(e.target.value)} />
-          <button onClick={loadPublicWishlist}>Load Public Wishlist</button>
-        </div>
-
-        {publicWishlist && (
-          <div>
-            <div className="info">
-              <div><b>wishlistId:</b> {publicWishlist.id}</div>
-              <div><b>title:</b> {publicWishlist.title}</div>
-            </div>
-            <select value={selectedPublicItemId} onChange={(e) => setSelectedPublicItemId(e.target.value)}>
-              <option value="">Select item</option>
-              {publicWishlist.items.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.title} | reserved: {String(item.isReserved)}
-                </option>
-              ))}
-            </select>
-            <div className="row">
-              <button onClick={reserveSelectedItem}>Reserve Selected Item</button>
-              <button onClick={unreserveSelectedItem}>Unreserve Selected Item</button>
+      <main id="home" className="page">
+        <section className="hero-section">
+          <div className="hero-copy">
+            <p className="eyebrow">Онлайн-вишлист для подарков</p>
+            <h1>Соберите желания в один аккуратный список</h1>
+            <p className="hero-text">
+              Создавайте wishlist, добавляйте ссылки и цены, отправляйте публичную ссылку друзьям и получайте только нужные подарки.
+            </p>
+            <div className="hero-actions">
+              <a className="button primary" href="#create">Создать wishlist</a>
+              <a className="button ghost" href="#public">Открыть по ссылке</a>
             </div>
           </div>
-        )}
+          <div className="hero-preview" aria-label="Пример wishlist">
+            <div className="preview-card large">
+              <span className="preview-badge">Birthday wishlist</span>
+              <h3>{createdWishlist?.title || "Подарки на день рождения"}</h3>
+              <p>{createdWishlist?.description || "Все идеи, ссылки и пожелания в одном месте."}</p>
+            </div>
+            <div className="preview-card small top">
+              <span className="gift-visual">01</span>
+              <div>
+                <strong>{createdWishlist?.items[0]?.title || "Наушники"}</strong>
+                <span>{formatPrice(createdWishlist?.items[0]?.price ?? 12990)}</span>
+              </div>
+            </div>
+            <div className="preview-card small bottom">
+              <span className="gift-visual">02</span>
+              <div>
+                <strong>{createdWishlist?.items[1]?.title || "LEGO Set"}</strong>
+                <span>Можно забронировать</span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-        <div className="status ok">{publicSuccess}</div>
-        <div className="status error">{publicError}</div>
-        <pre>{pretty(publicDebug)}</pre>
-      </section>
+        <section className="panel auth-panel">
+          <div className="section-heading">
+            <p className="eyebrow">Аккаунт</p>
+            <h2>Войдите, чтобы создавать и бронировать подарки</h2>
+          </div>
+          <div className="auth-grid">
+            <form className="form-card" onSubmit={handleRegister}>
+              <h3>Регистрация</h3>
+              <label>
+                Email
+                <input placeholder="you@example.com" value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} />
+              </label>
+              <label>
+                Пароль
+                <input placeholder="Минимум 4 символа" type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} />
+              </label>
+              <label>
+                Имя
+                <input placeholder="Как вас показать друзьям" value={registerDisplayName} onChange={(e) => setRegisterDisplayName(e.target.value)} />
+              </label>
+              <button type="submit">Зарегистрироваться</button>
+            </form>
 
-      <section>
-        <h2>4. My Reservations</h2>
-        <button onClick={loadReservations}>Load My Reservations</button>
-        <div className="status ok">{reservationsSuccess}</div>
-        <div className="status error">{reservationsError}</div>
-        <pre>{pretty(reservationsDebug)}</pre>
-        {reservations.length > 0 && (
-          <ul>
+            <form className="form-card" onSubmit={handleLogin}>
+              <h3>Вход</h3>
+              <label>
+                Email
+                <input placeholder="you@example.com" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+              </label>
+              <label>
+                Пароль
+                <input placeholder="Ваш пароль" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
+              </label>
+              <div className="button-row">
+                <button type="submit">Войти</button>
+                <button type="button" className="secondary" onClick={handleLogout}>Выйти</button>
+              </div>
+              <p className="helper-text">
+                Сейчас: {me ? `${me.displayName || me.email}` : "вы не авторизованы"}
+              </p>
+            </form>
+          </div>
+          {(authSuccess || authError) && (
+            <div className={authError ? "notice error" : "notice ok"}>{authError || authSuccess}</div>
+          )}
+          <details className="debug">
+            <summary>Ответ авторизации</summary>
+            <pre>{pretty(authDebug)}</pre>
+          </details>
+        </section>
+
+        <section id="create" className="workspace">
+          <div className="workspace-main">
+            <div className="section-heading">
+              <p className="eyebrow">Сценарий владельца</p>
+              <h2>Создайте wishlist и наполните его подарками</h2>
+            </div>
+
+            <form className="panel wishlist-form" onSubmit={handleCreateWishlist}>
+              <div className="form-grid two-columns">
+                <label>
+                  Название wishlist
+                  <input placeholder="Например, День рождения" value={wishlistTitle} onChange={(e) => setWishlistTitle(e.target.value)} />
+                </label>
+                <label>
+                  Описание
+                  <input placeholder="Коротко для друзей" value={wishlistDescription} onChange={(e) => setWishlistDescription(e.target.value)} />
+                </label>
+              </div>
+              <button type="submit">Создать wishlist</button>
+            </form>
+
+            <form className="panel wishlist-form" onSubmit={handleAddItem}>
+              <div className="section-heading compact">
+                <h3>Новая хотелка</h3>
+                <p>Название обязательно, остальные поля можно оставить пустыми.</p>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Название
+                  <input placeholder="LEGO Set" value={itemTitle} onChange={(e) => setItemTitle(e.target.value)} />
+                </label>
+                <label>
+                  Ссылка на магазин
+                  <input placeholder="https://..." value={itemUrl} onChange={(e) => setItemUrl(e.target.value)} />
+                </label>
+                <label>
+                  Примерная цена
+                  <input placeholder="9990" inputMode="decimal" value={itemPrice} onChange={(e) => setItemPrice(e.target.value)} />
+                </label>
+                <label>
+                  Комментарий
+                  <input placeholder="Размер, цвет, важные детали" value={itemComment} onChange={(e) => setItemComment(e.target.value)} />
+                </label>
+              </div>
+              <button type="submit">Добавить в wishlist</button>
+            </form>
+
+            <div className="panel load-panel">
+              <label>
+                Загрузить мой wishlist по ID
+                <input
+                  placeholder="wishlistId"
+                  value={wishlistLookupId}
+                  onChange={(e) => setWishlistLookupId(e.target.value)}
+                />
+              </label>
+              <button onClick={() => loadMyWishlist()}>Загрузить</button>
+            </div>
+
+            {(wishlistSectionSuccess || wishlistSectionError) && (
+              <div className={wishlistSectionError ? "notice error" : "notice ok"}>
+                {wishlistSectionError || wishlistSectionSuccess}
+              </div>
+            )}
+          </div>
+
+          <aside className="wishlist-summary">
+            <div className="panel sticky-panel">
+              <div className="section-heading compact">
+                <p className="eyebrow">Ваш список</p>
+                <h3>{createdWishlist?.title || "Wishlist ещё не создан"}</h3>
+                <p>{createdWishlist?.description || "После создания здесь появятся подарки и публичная ссылка."}</p>
+              </div>
+
+              {createdWishlist && (
+                <div className="share-box">
+                  <span>Публичная ссылка</span>
+                  <code>{publicLink}</code>
+                  <button className="secondary" onClick={copyPublicLink}>Скопировать ссылку</button>
+                </div>
+              )}
+
+              <div className="items-list">
+                {(createdWishlist?.items ?? []).map((item) => (
+                  <article className="gift-card" key={item.id}>
+                    <div className="gift-thumb">{item.title.slice(0, 1).toUpperCase()}</div>
+                    <div className="gift-content">
+                      <div className="gift-title-row">
+                        <h4>{item.title}</h4>
+                        <span className={item.isReserved ? "pill reserved" : "pill available"}>
+                          {item.isReserved ? "Забронировано" : "Свободно"}
+                        </span>
+                      </div>
+                      <p>{item.comment || "Без дополнительного описания"}</p>
+                      <div className="gift-meta">
+                        <span>{formatPrice(item.price)}</span>
+                        {item.url && <a href={item.url} target="_blank" rel="noreferrer">Магазин</a>}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {createdWishlist && createdWishlist.items.length === 0 && (
+                  <p className="empty-state">Добавьте первый подарок, чтобы список стал полезным для друзей.</p>
+                )}
+              </div>
+
+              <details className="debug">
+                <summary>Ответ wishlist API</summary>
+                <pre>{pretty(wishlistDebug)}</pre>
+              </details>
+            </div>
+          </aside>
+        </section>
+
+        <section id="public" className="panel public-section">
+          <div className="section-heading">
+            <p className="eyebrow">Сценарий друга</p>
+            <h2>Откройте публичный wishlist и забронируйте подарок</h2>
+          </div>
+          <div className="load-panel">
+            <label>
+              Share token
+              <input placeholder="Вставьте token из публичной ссылки" value={publicShareToken} onChange={(e) => setPublicShareToken(e.target.value)} />
+            </label>
+            <button onClick={loadPublicWishlist}>Открыть wishlist</button>
+          </div>
+
+          {publicWishlist && (
+            <div className="public-layout">
+              <div className="public-header">
+                <div>
+                  <p className="eyebrow">Публичный список</p>
+                  <h3>{publicWishlist.title}</h3>
+                  <p>{publicWishlist.description || "Автор не добавил описание."}</p>
+                </div>
+                <span className="counter">{publicWishlist.items.length} подарков</span>
+              </div>
+
+              <div className="public-items">
+                {publicWishlist.items.map((item) => (
+                  <button
+                    type="button"
+                    className={selectedPublicItemId === item.id ? "gift-card selectable active" : "gift-card selectable"}
+                    key={item.id}
+                    onClick={() => {
+                      setSelectedPublicItemId(item.id);
+                      setChatItemId(item.id);
+                    }}
+                  >
+                    <div className="gift-thumb">{item.title.slice(0, 1).toUpperCase()}</div>
+                    <div className="gift-content">
+                      <div className="gift-title-row">
+                        <h4>{item.title}</h4>
+                        <span className={item.isReserved ? "pill reserved" : "pill available"}>
+                          {item.isReserved ? "Забронировано" : "Можно выбрать"}
+                        </span>
+                      </div>
+                      <p>{item.comment || "Детали можно уточнить в вопросах."}</p>
+                      <div className="gift-meta">
+                        <span>{formatPrice(item.price)}</span>
+                        {item.url && <span>Есть ссылка</span>}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="reserve-panel">
+                <h3>{selectedPublicItem?.title || "Выберите подарок"}</h3>
+                <p>
+                  {selectedPublicItem
+                    ? selectedPublicItem.isReserved
+                      ? "Этот подарок уже забронирован. Если это ваша бронь, можно снять её."
+                      : "После бронирования владелец и другие гости увидят, что подарок уже занят."
+                    : "Нажмите на карточку подарка в списке."}
+                </p>
+                <div className="button-row">
+                  <button onClick={reserveSelectedItem}>Забронировать</button>
+                  <button className="secondary" onClick={unreserveSelectedItem}>Снять бронь</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(publicSuccess || publicError) && (
+            <div className={publicError ? "notice error" : "notice ok"}>{publicError || publicSuccess}</div>
+          )}
+          <details className="debug">
+            <summary>Ответ public wishlist API</summary>
+            <pre>{pretty(publicDebug)}</pre>
+          </details>
+        </section>
+
+        <section className="panel reservations-section">
+          <div className="section-heading">
+            <p className="eyebrow">Мои брони</p>
+            <h2>Подарки, которые вы уже выбрали</h2>
+          </div>
+          <button onClick={loadReservations}>Обновить мои брони</button>
+          {(reservationsSuccess || reservationsError) && (
+            <div className={reservationsError ? "notice error" : "notice ok"}>
+              {reservationsError || reservationsSuccess}
+            </div>
+          )}
+          <div className="reservation-list">
             {reservations.map((x) => (
-              <li key={x.itemId}>
-                {x.itemTitle} | wishlist: {x.wishlistTitle} ({x.wishlistId}) | reservedAt: {x.reservedAtUtc}
-              </li>
+              <article className="reservation-card" key={x.itemId}>
+                <strong>{x.itemTitle}</strong>
+                <span>{x.wishlistTitle}</span>
+                <time>{formatDate(x.reservedAtUtc)}</time>
+              </article>
             ))}
-          </ul>
-        )}
-      </section>
+            {reservations.length === 0 && <p className="empty-state">Здесь появятся ваши забронированные подарки.</p>}
+          </div>
+          <details className="debug">
+            <summary>Ответ reservations API</summary>
+            <pre>{pretty(reservationsDebug)}</pre>
+          </details>
+        </section>
 
-      <section>
-        <h2>5. Chat</h2>
-        <div className="grid chat-grid">
-          <input placeholder="wishlistId" value={chatWishlistId} onChange={(e) => setChatWishlistId(e.target.value)} />
-          <input placeholder="itemId" value={chatItemId} onChange={(e) => setChatItemId(e.target.value)} />
-          <input placeholder="shareToken" value={chatShareToken} onChange={(e) => setChatShareToken(e.target.value)} />
-        </div>
-        <div className="row">
-          <button onClick={loadChatMessages}>Load Chat History (REST)</button>
-          <button onClick={connectChatWebSocket}>{wsConnected ? "Reconnect WS" : "Connect WS"}</button>
-          <button onClick={disconnectChatWebSocket}>Disconnect WS</button>
-          <span className={wsConnected ? "status ok inline" : "status inline"}>ws: {wsConnected ? "connected" : "disconnected"}</span>
-        </div>
-        <form onSubmit={sendChatMessage}>
-          <input placeholder="chat text" value={chatText} onChange={(e) => setChatText(e.target.value)} />
-          <button type="submit">Send Message (REST)</button>
-        </form>
-        <div className="status ok">{chatSuccess}</div>
-        <div className="status error">{chatError}</div>
-        <pre>{pretty(chatDebug)}</pre>
-        {chatMessages.length > 0 && (
-          <ul>
-            {chatMessages.map((m) => (
-              <li key={m.id}>
-                {m.createdAtUtc} | {m.isMine ? "me" : (m.senderDisplayName || m.author)}: {m.text}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <section id="chat" className="panel chat-section">
+          <div className="section-heading">
+            <p className="eyebrow">Уточняющие вопросы</p>
+            <h2>Обсудите размер, цвет или важные детали подарка</h2>
+          </div>
 
-      <section>
-        <h2>6. Notifications / Inbox</h2>
-        <button onClick={loadInbox}>Load /notifications/inbox</button>
-        <div className="status ok">{inboxSuccess}</div>
-        <div className="status error">{inboxError}</div>
-        <pre>{pretty(inboxDebug)}</pre>
-        {inboxEvents.length > 0 && (
-          <ul>
+          <div className="form-grid chat-grid">
+            <label>
+              Wishlist ID
+              <input placeholder="wishlistId" value={chatWishlistId} onChange={(e) => setChatWishlistId(e.target.value)} />
+            </label>
+            <label>
+              Item ID
+              <input placeholder="itemId" value={chatItemId} onChange={(e) => setChatItemId(e.target.value)} />
+            </label>
+            <label>
+              Share token
+              <input placeholder="shareToken" value={chatShareToken} onChange={(e) => setChatShareToken(e.target.value)} />
+            </label>
+          </div>
+
+          <div className="chat-window">
+            <div className="chat-toolbar">
+              <div>
+                <strong>{selectedChatItem?.title || "Выберите подарок для вопроса"}</strong>
+                <span className={wsConnected ? "connection on" : "connection"}>{wsConnected ? "Live подключен" : "Live выключен"}</span>
+              </div>
+              <div className="button-row">
+                <button className="secondary" onClick={loadChatMessages}>История</button>
+                <button className="secondary" onClick={connectChatWebSocket}>{wsConnected ? "Переподключить" : "Live"}</button>
+                <button className="secondary" onClick={disconnectChatWebSocket}>Отключить</button>
+              </div>
+            </div>
+
+            <div className="messages">
+              {chatMessages.map((m) => (
+                <article className={m.isMine ? "message mine" : "message"} key={m.id}>
+                  <span>{m.isMine ? "Вы" : (m.senderDisplayName || m.author)}</span>
+                  <p>{m.text}</p>
+                  <time>{formatDate(m.createdAtUtc)}</time>
+                </article>
+              ))}
+              {chatMessages.length === 0 && <p className="empty-state">Сообщений пока нет. Задайте первый вопрос по подарку.</p>}
+            </div>
+
+            <form className="message-form" onSubmit={sendChatMessage}>
+              <input placeholder="Например: какой размер нужен?" value={chatText} onChange={(e) => setChatText(e.target.value)} />
+              <button type="submit">Отправить</button>
+            </form>
+          </div>
+
+          {(chatSuccess || chatError) && (
+            <div className={chatError ? "notice error" : "notice ok"}>{chatError || chatSuccess}</div>
+          )}
+          <details className="debug">
+            <summary>Ответ chat API</summary>
+            <pre>{pretty(chatDebug)}</pre>
+          </details>
+        </section>
+
+        <section className="panel notifications-section">
+          <div className="section-heading">
+            <p className="eyebrow">Уведомления</p>
+            <h2>Вопросы и события по вашим подаркам</h2>
+          </div>
+          <button onClick={loadInbox}>Обновить уведомления</button>
+          {(inboxSuccess || inboxError) && (
+            <div className={inboxError ? "notice error" : "notice ok"}>{inboxError || inboxSuccess}</div>
+          )}
+          <div className="notification-list">
             {inboxEvents.map((evt) => (
-              <li key={evt.eventId}>
-                {evt.eventType} | eventId: {evt.eventId} | occurred: {evt.occurredAtUtc} | received: {evt.receivedAtUtc}
-              </li>
+              <article className="notification-card" key={evt.eventId}>
+                <strong>{evt.eventType}</strong>
+                <span>Wishlist: {evt.wishlistId}</span>
+                <time>{formatDate(evt.occurredAtUtc || evt.receivedAtUtc)}</time>
+              </article>
             ))}
-          </ul>
-        )}
-      </section>
+            {inboxEvents.length === 0 && <p className="empty-state">Новых уведомлений пока нет.</p>}
+          </div>
+          <details className="debug">
+            <summary>Ответ notifications API</summary>
+            <pre>{pretty(inboxDebug)}</pre>
+          </details>
+        </section>
+      </main>
     </div>
   );
 }
