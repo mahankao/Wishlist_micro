@@ -181,6 +181,12 @@ h3 {
   gap: 8px;
 }
 
+.button-column {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
 .segmented-control {
   display: inline-flex;
   gap: 4px;
@@ -619,6 +625,11 @@ input::placeholder {
 
   .topbar-actions {
     justify-content: flex-start;
+  }
+
+  .button-column {
+    justify-items: stretch;
+    width: 100%;
   }
 
   .segmented-control {

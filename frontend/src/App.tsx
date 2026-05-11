@@ -47,6 +47,7 @@ type PublicWishlistResponse = {
 
 type MyReservation = {
   wishlistId: string;
+  shareToken: string;
   wishlistTitle: string;
   itemId: string;
   itemTitle: string;
@@ -68,6 +69,8 @@ type NotificationInboxEvent = {
   eventType: string;
   wishlistId: string;
   itemId: string;
+  ownerUserId: string;
+  actorUserId: string;
   occurredAtUtc: string;
   receivedAtUtc: string;
 };
@@ -77,6 +80,15 @@ type ConversationTarget = {
   itemId: string;
   shareToken: string;
   title: string;
+};
+
+type MessageNotification = {
+  itemId: string;
+  wishlistTitle: string;
+  itemTitle: string;
+  senderName: string;
+  text: string;
+  createdAtUtc: string;
 };
 
 const defaultPhoto =
@@ -115,6 +127,18 @@ function formatDate(value?: string | null): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function notificationTitle(eventType: string): string {
+  if (eventType === "wishlist.item.reserved") return "Подарок забронирован";
+  if (eventType === "wishlist.item.unreserved") return "Бронь подарка снята";
+  return "Новое событие";
+}
+
+function notificationDescription(event: NotificationInboxEvent): string {
+  if (event.eventType === "wishlist.item.reserved") return "Кто-то выбрал подарок из вашего wishlist.";
+  if (event.eventType === "wishlist.item.unreserved") return "Подарок снова доступен для выбора.";
+  return `Событие по wishlist ${event.wishlistId}`;
 }
 
 function getRouteShareToken(): string {
@@ -179,6 +203,7 @@ function App() {
 
   const [reservations, setReservations] = useState<MyReservation[]>([]);
   const [inboxEvents, setInboxEvents] = useState<NotificationInboxEvent[]>([]);
+  const [messageNotifications, setMessageNotifications] = useState<MessageNotification[]>([]);
 
   const [conversation, setConversation] = useState<ConversationTarget | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -190,6 +215,12 @@ function App() {
     if (!createdWishlist?.shareToken) return "";
     return `${window.location.origin}/wishlist/${createdWishlist.shareToken}`;
   }, [createdWishlist]);
+
+  const visibleInboxEvents = useMemo(() => {
+    if (!me) return [];
+    const ownedWishlistIds = new Set(myWishlists.map((wishlist) => wishlist.id));
+    return inboxEvents.filter((event) => event.ownerUserId === me.id || ownedWishlistIds.has(event.wishlistId));
+  }, [inboxEvents, me, myWishlists]);
 
   const selectedPublicItem = useMemo(() => {
     return publicWishlist?.items.find((item) => item.id === selectedPublicItemId) ?? null;
@@ -349,6 +380,16 @@ function App() {
     if (!createdWishlist && response[0]) {
       setCreatedWishlist(response[0]);
     }
+    await loadMessageNotifications(response);
+  }
+
+  function beginNewWishlist() {
+    setCreatedWishlist(null);
+    setWishlistTitle("");
+    setWishlistDescription("");
+    setWishlistMessage("");
+    setWishlistError("");
+    setConversation(null);
   }
 
   async function copyPublicLink() {
@@ -391,7 +432,7 @@ function App() {
     setPublicError("");
     setPublicMessage("");
     try {
-      await apiRequest<WishlistItem>(`/wishlists/${publicWishlist.id}/items/${itemId}/reserve`, { method: "POST" });
+      await apiRequest<WishlistItem>(`/wishlists/${publicWishlist.id}/items/${itemId}/reserve`, { method: "POST", body: {} });
       setPublicMessage("Подарок забронирован. Спасибо, что предупредили остальных.");
       await loadPublicWishlist(publicShareToken);
       await loadReservations();
@@ -409,6 +450,37 @@ function App() {
   async function loadInbox() {
     const response = await apiRequest<NotificationInboxEvent[]>("/notifications/inbox", { auth: false });
     setInboxEvents(response);
+  }
+
+  async function loadMessageNotifications(wishlists: WishlistSummary[]) {
+    if (!token) return;
+    const next: MessageNotification[] = [];
+    for (const wishlist of wishlists) {
+      for (const item of wishlist.items) {
+        try {
+          const query = new URLSearchParams({
+            wishlistId: wishlist.id,
+            itemId: item.id,
+            shareToken: wishlist.shareToken
+          });
+          const messages = await apiRequest<ChatMessage[]>(`/chat/messages?${query.toString()}`);
+          const latestIncoming = [...messages].reverse().find((message) => !message.isMine);
+          if (latestIncoming) {
+            next.push({
+              itemId: item.id,
+              wishlistTitle: wishlist.title,
+              itemTitle: item.title,
+              senderName: latestIncoming.senderDisplayName || latestIncoming.author || "Гость",
+              text: latestIncoming.text,
+              createdAtUtc: latestIncoming.createdAtUtc
+            });
+          }
+        } catch {
+          // Если отдельная переписка недоступна, остальные уведомления всё равно должны загрузиться.
+        }
+      }
+    }
+    setMessageNotifications(next.sort((a, b) => new Date(b.createdAtUtc).getTime() - new Date(a.createdAtUtc).getTime()));
   }
 
   function startPublicConversation(item: WishlistItem) {
@@ -472,6 +544,7 @@ function App() {
       setChatText("");
       setChatMessage("Сообщение отправлено.");
       await loadInbox();
+      if (myWishlists.length > 0) await loadMessageNotifications(myWishlists);
     } catch (error) {
       setChatError(explainError(error, "Не получилось отправить сообщение."));
     }
@@ -717,6 +790,7 @@ function App() {
                           <strong>{reservation.itemTitle}</strong>
                           <span>{reservation.wishlistTitle}</span>
                         </div>
+                        <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                       </article>
                     ))}
                     {reservations.length === 0 && <p className="empty">Вы пока не выбрали подарки для друзей.</p>}
@@ -735,7 +809,12 @@ function App() {
                         : "Название и описание помогут друзьям понять настроение списка."}
                     </p>
                   </div>
-                  {createdWishlist && <button className="secondary" onClick={copyPublicLink}>Скопировать ссылку</button>}
+                  {createdWishlist && (
+                    <div className="button-column">
+                      <button className="secondary" onClick={copyPublicLink}>Скопировать ссылку</button>
+                      <button className="secondary" onClick={beginNewWishlist}>Создать ещё один wishlist</button>
+                    </div>
+                  )}
                 </div>
 
                 {!createdWishlist ? (
@@ -825,8 +904,11 @@ function App() {
                 <div className="compact-list">
                   {reservations.map((reservation) => (
                     <article key={reservation.itemId}>
-                      <strong>{reservation.itemTitle}</strong>
-                      <span>{reservation.wishlistTitle}</span>
+                      <div>
+                        <strong>{reservation.itemTitle}</strong>
+                        <span>{reservation.wishlistTitle}</span>
+                      </div>
+                      <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                     </article>
                   ))}
                   {reservations.length === 0 && <p className="empty">Вы пока ничего не бронировали.</p>}
@@ -837,13 +919,25 @@ function App() {
                 <p className="eyebrow">Уведомления</p>
                 <h2>События</h2>
                 <div className="compact-list">
-                  {inboxEvents.map((event) => (
-                    <article key={event.eventId}>
-                      <strong>{event.eventType}</strong>
-                      <span>{formatDate(event.occurredAtUtc || event.receivedAtUtc)}</span>
+                  {messageNotifications.map((message) => (
+                    <article key={`${message.itemId}-${message.createdAtUtc}`}>
+                      <div>
+                        <strong>Новый вопрос по подарку</strong>
+                        <span>{message.senderName}: {message.text}</span>
+                        <span>{message.wishlistTitle} · {message.itemTitle} · {formatDate(message.createdAtUtc)}</span>
+                      </div>
                     </article>
                   ))}
-                  {inboxEvents.length === 0 && <p className="empty">Новых событий пока нет.</p>}
+                  {visibleInboxEvents.map((event) => (
+                    <article key={event.eventId}>
+                      <div>
+                        <strong>{notificationTitle(event.eventType)}</strong>
+                        <span>{notificationDescription(event)}</span>
+                        <span>{formatDate(event.occurredAtUtc || event.receivedAtUtc)}</span>
+                      </div>
+                    </article>
+                  ))}
+                  {messageNotifications.length === 0 && visibleInboxEvents.length === 0 && <p className="empty">Новых событий пока нет.</p>}
                 </div>
               </section>
             </aside>

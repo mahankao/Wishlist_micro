@@ -35,6 +35,7 @@ public record PublicWishlistResponse(
 
 public record MyReservedItemResponse(
     Guid WishlistId,
+    Guid ShareToken,
     string WishlistTitle,
     Guid ItemId,
     string ItemTitle,

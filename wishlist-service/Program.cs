@@ -240,6 +240,7 @@ app.MapGet("/wishlists/reservations/me", async (
         .OrderByDescending(x => x.ReservedAtUtc)
         .Select(x => new MyReservedItemResponse(
             x.WishlistId,
+            x.Wishlist.ShareToken,
             x.Wishlist.Title,
             x.Id,
             x.Title,

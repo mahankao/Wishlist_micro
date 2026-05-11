@@ -176,7 +176,7 @@ app.MapPost("/chat/messages", async (
     if (userId is null) return Results.Unauthorized();
 
     // Сообщение можно отправить только в существующую комнату wishlist item.
-    var text = request.Text.Trim();
+    var text = request.Text?.Trim() ?? "";
     if (string.IsNullOrWhiteSpace(text) || text.Length > 2000)
     {
         return Results.BadRequest(new { error = "Text is required and must be at most 2000 characters." });
@@ -197,7 +197,16 @@ app.MapPost("/chat/messages", async (
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.ChatMessagesSent.Inc();
 
-    var displayNames = new Dictionary<Guid, string> { [userId.Value] = GetDisplayName(principal) };
+    var displayName = GetDisplayName(principal);
+    if (displayName == "anonymous")
+    {
+        var user = await userServiceClient.GetUserAsync(userId.Value, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(user?.DisplayName))
+        {
+            displayName = user.DisplayName;
+        }
+    }
+    var displayNames = new Dictionary<Guid, string> { [userId.Value] = displayName };
     return Results.Ok(ToResponse(message, userId.Value, displayNames));
 })
 .RequireAuthorization()
