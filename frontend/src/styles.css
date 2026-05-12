@@ -17,6 +17,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
+  text-wrap: pretty;
   background:
     linear-gradient(125deg, rgba(234, 108, 79, 0.14), transparent 32rem),
     linear-gradient(180deg, #fffaf3 0%, #f7f0e5 44%, #eef6f0 100%);
@@ -277,6 +278,11 @@ h3 {
   padding: 20px;
 }
 
+.hero-card .status-pill {
+  display: inline-flex;
+  margin-bottom: 12px;
+}
+
 .hero-card p {
   margin-bottom: 0;
   color: #60706b;
@@ -457,8 +463,12 @@ input::placeholder {
 .product-title {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
+  gap: 14px;
   align-items: flex-start;
+}
+
+.product-title h3 {
+  line-height: 1.15;
 }
 
 .product-content p {
