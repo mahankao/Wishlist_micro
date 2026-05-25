@@ -97,16 +97,16 @@ const defaultPhoto =
 function explainError(error: unknown, fallback = "Не получилось выполнить действие. Попробуйте ещё раз."): string {
   const rawMessage = error instanceof Error ? error.message : String(error || "");
   if (!rawMessage) return fallback;
-  if (rawMessage.includes("Failed to fetch")) return "Сервис временно недоступен. Проверьте, что backend запущен, и\u00A0попробуйте снова.";
-  if (rawMessage.includes("401") || rawMessage.includes("Unauthorized")) return "Войдите в\u00A0аккаунт, чтобы выполнить это действие.";
-  if (rawMessage.includes("403") || rawMessage.includes("Forbidden")) return "У\u00A0вас нет доступа к\u00A0этому действию.";
+  if (rawMessage.includes("Failed to fetch")) return "Сервис временно недоступен. Проверьте, что backend запущен, и попробуйте снова.";
+  if (rawMessage.includes("401") || rawMessage.includes("Unauthorized")) return "Войдите в аккаунт, чтобы выполнить это действие.";
+  if (rawMessage.includes("403") || rawMessage.includes("Forbidden")) return "У вас нет доступа к этому действию.";
   if (rawMessage.includes("already reserved")) return "Этот подарок уже забронирован другим пользователем.";
-  if (rawMessage.includes("Invalid registration payload")) return "Проверьте имя, email и\u00A0пароль. Пароль должен быть не\u00A0короче 8\u00A0символов.";
-  if (rawMessage.includes("Invalid login payload")) return "Введите email и\u00A0пароль.";
+  if (rawMessage.includes("Invalid registration payload")) return "Проверьте имя, email и пароль. Пароль должен быть не короче 8 символов.";
+  if (rawMessage.includes("Invalid login payload")) return "Введите email и пароль.";
   if (rawMessage.includes("Invalid credentials")) return "Неверный email или пароль.";
   if (rawMessage.includes("Wishlist not found")) return "Wishlist не найден. Проверьте ссылку.";
   if (rawMessage.includes("Title is required")) return "Введите название подарка. Оно обязательно.";
-  if (rawMessage.includes("Url must") || rawMessage.includes("ImageUrl must")) return "Ссылка должна начинаться с\u00A0http:// или https://.";
+  if (rawMessage.includes("Url must") || rawMessage.includes("ImageUrl must")) return "Ссылка должна начинаться с http:// или https://.";
   return rawMessage;
 }
 
@@ -136,9 +136,9 @@ function notificationTitle(eventType: string): string {
 }
 
 function notificationDescription(event: NotificationInboxEvent): string {
-  if (event.eventType === "wishlist.item.reserved") return "Кто-то выбрал подарок из\u00A0вашего wishlist.";
+  if (event.eventType === "wishlist.item.reserved") return "Кто-то выбрал подарок из вашего wishlist.";
   if (event.eventType === "wishlist.item.unreserved") return "Подарок снова доступен для выбора.";
-  return `Событие по\u00A0wishlist ${event.wishlistId}`;
+  return `Событие по wishlist ${event.wishlistId}`;
 }
 
 function getRouteShareToken(): string {
@@ -298,7 +298,7 @@ function App() {
       setMe(response.user);
       setLoginEmail(registerEmail);
       setAuthMode("login");
-      setAuthMessage("Аккаунт создан, вы\u00A0уже вошли.");
+      setAuthMessage("Аккаунт создан, вы уже вошли.");
     } catch (error) {
       setAuthError(explainError(error));
     }
@@ -345,7 +345,7 @@ function App() {
       });
       setCreatedWishlist(response);
       setMyWishlists((prev) => [response, ...prev.filter((wishlist) => wishlist.id !== response.id)]);
-      setWishlistMessage("Wishlist готов. Добавьте подарки и\u00A0отправьте ссылку друзьям.");
+      setWishlistMessage("Wishlist готов. Добавьте подарки и отправьте ссылку друзьям.");
     } catch (error) {
       setWishlistError(explainError(error));
     }
@@ -539,7 +539,7 @@ function App() {
     e.preventDefault();
     if (!conversation) return;
     if (!token) {
-      setChatError("Войдите или зарегистрируйтесь, чтобы задать вопрос по\u00A0подарку.");
+      setChatError("Войдите или зарегистрируйтесь, чтобы задать вопрос по подарку.");
       return;
     }
 
@@ -572,8 +572,8 @@ function App() {
         <h2>{authMode === "login" ? "Войти" : "Создать аккаунт"}</h2>
         <p className="muted">
           {authMode === "login"
-            ? "Авторизация нужна для создания wishlist, бронирования и\u00A0вопросов."
-            : "После регистрации вы\u00A0сразу попадёте в\u00A0аккаунт."}
+            ? "Авторизация нужна для создания wishlist, бронирования и вопросов."
+            : "После регистрации вы сразу попадёте в аккаунт."}
         </p>
       </div>
 
@@ -619,7 +619,7 @@ function App() {
     <section className="panel conversation-panel">
       <div className="panel-heading">
         <div>
-          <p className="eyebrow">Вопросы по\u00A0подарку</p>
+          <p className="eyebrow">Вопросы по подарку</p>
           <h2>{conversation.title}</h2>
         </div>
         <button className="secondary" onClick={() => setConversation(null)}>Закрыть</button>
@@ -662,7 +662,7 @@ function App() {
           {!publicWishlist && (
             <section className="panel center-panel">
               <h1>Wishlist не найден</h1>
-              <p className="muted">{publicError || "Проверьте публичную ссылку и\u00A0попробуйте снова."}</p>
+              <p className="muted">{publicError || "Проверьте публичную ссылку и попробуйте снова."}</p>
             </section>
           )}
 
@@ -728,7 +728,7 @@ function App() {
             <p className="eyebrow">wishlist service</p>
             <h1>Wishlist, которым удобно делиться</h1>
             <p>
-              Создайте список желаний, добавьте фото, ссылки и\u00A0детали подарков. Друзья откроют ссылку, выберут подарок и\u00A0зададут вопрос, если нужно уточнение.
+              Создайте список желаний, добавьте фото, ссылки и детали подарков. Друзья откроют ссылку, выберут подарок и зададут вопрос, если нужно уточнение.
             </p>
             <div className="hero-actions">
               <a className="button" href={me ? "#create" : "#auth"}>{me ? "Создать wishlist" : "Начать"}</a>
@@ -740,7 +740,7 @@ function App() {
             <div>
               <span className="status-pill">Свободно</span>
               <h3>{createdWishlist?.items[0]?.title || "Подарок мечты"}</h3>
-              <p>{createdWishlist?.items[0]?.comment || "Фото, магазин, цена и комментарии собраны в\u00A0одной карточке."}</p>
+              <p>{createdWishlist?.items[0]?.comment || "Фото, магазин, цена и комментарии собраны в одной карточке."}</p>
             </div>
           </div>
         </section>
@@ -750,7 +750,7 @@ function App() {
         <section id="open" className="panel open-panel">
           <div>
             <p className="eyebrow">Для гостей</p>
-            <h2>Открыть wishlist по\u00A0ссылке</h2>
+            <h2>Открыть wishlist по ссылке</h2>
             <p className="muted">Вставьте публичную ссылку, которую прислал владелец списка.</p>
           </div>
           <form onSubmit={openWishlistFromInput}>
@@ -797,7 +797,7 @@ function App() {
                         <button className="secondary small" onClick={() => setCreatedWishlist(wishlist)}>Открыть</button>
                       </article>
                     ))}
-                    {myWishlists.length === 0 && <p className="empty">Вы\u00A0ещё не\u00A0создавали wishlist.</p>}
+                    {myWishlists.length === 0 && <p className="empty">Вы ещё не создавали wishlist.</p>}
                   </div>
                 ) : (
                   <div className="compact-list">
@@ -810,7 +810,7 @@ function App() {
                         <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                       </article>
                     ))}
-                    {reservations.length === 0 && <p className="empty">Вы пока не\u00A0выбрали подарки для друзей.</p>}
+                    {reservations.length === 0 && <p className="empty">Вы пока не выбрали подарки для друзей.</p>}
                   </div>
                 )}
               </section>
@@ -823,7 +823,7 @@ function App() {
                     <p className="muted">
                       {createdWishlist
                         ? createdWishlist.description || "Описание можно оставить пустым."
-                        : "Название и\u00A0описание помогут друзьям понять настроение списка."}
+                        : "Название и описание помогут друзьям понять настроение списка."}
                     </p>
                   </div>
                   {createdWishlist && (
@@ -928,7 +928,7 @@ function App() {
                       <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                     </article>
                   ))}
-                  {reservations.length === 0 && <p className="empty">Вы пока ничего не\u00A0бронировали.</p>}
+                  {reservations.length === 0 && <p className="empty">Вы пока ничего не бронировали.</p>}
                 </div>
               </section>
 
