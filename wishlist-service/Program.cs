@@ -175,6 +175,61 @@ app.MapGet("/wishlists", async (
 .RequireAuthorization()
 .WithTags("Wishlists");
 
+app.MapPut("/wishlists/{wishlistId:guid}", async (
+    Guid wishlistId,
+    UpdateWishlistRequest request,
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var wishlist = await db.Wishlists
+        .Include(x => x.Items.OrderBy(i => i.CreatedAtUtc))
+        .FirstOrDefaultAsync(x => x.Id == wishlistId, cancellationToken);
+    if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
+    if (wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var title = request.Title.Trim();
+    var description = request.Description?.Trim();
+    if (!IsValidWishlistPayload(title, description))
+    {
+        return Results.BadRequest(new { error = "Invalid wishlist payload." });
+    }
+
+    wishlist.Title = title;
+    wishlist.Description = string.IsNullOrWhiteSpace(description) ? null : description;
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.Ok(ToWishlistResponse(wishlist));
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
+app.MapDelete("/wishlists/{wishlistId:guid}", async (
+    Guid wishlistId,
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var wishlist = await db.Wishlists
+        .Include(x => x.Items)
+        .FirstOrDefaultAsync(x => x.Id == wishlistId, cancellationToken);
+    if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
+    if (wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    db.Wishlists.Remove(wishlist);
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.NoContent();
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
 app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     Guid wishlistId,
     AddWishlistItemRequest request,
@@ -222,6 +277,68 @@ app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     ServiceMetrics.WishlistItemsAdded.Inc();
 
     return Results.Created($"/wishlists/{wishlistId}/items/{item.Id}", ToItemResponse(item));
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
+app.MapPut("/wishlists/{wishlistId:guid}/items/{itemId:guid}", async (
+    Guid wishlistId,
+    Guid itemId,
+    UpdateWishlistItemRequest request,
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var item = await db.WishlistItems
+        .Include(x => x.Wishlist)
+        .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
+    if (item is null) return Results.NotFound(new { error = "Wishlist item not found." });
+    if (item.Wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    var title = request.Title.Trim();
+    var url = request.Url?.Trim();
+    var imageUrl = request.ImageUrl?.Trim();
+    var comment = request.Comment?.Trim();
+    if (!IsValidItemPayload(title, url, imageUrl, request.Price, comment, out var validationError))
+    {
+        return Results.BadRequest(new { error = validationError });
+    }
+
+    item.Title = title;
+    item.Url = string.IsNullOrWhiteSpace(url) ? null : url;
+    item.ImageUrl = string.IsNullOrWhiteSpace(imageUrl) ? null : imageUrl;
+    item.Price = request.Price;
+    item.Comment = string.IsNullOrWhiteSpace(comment) ? null : comment;
+
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(ToItemResponse(item));
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
+app.MapDelete("/wishlists/{wishlistId:guid}/items/{itemId:guid}", async (
+    Guid wishlistId,
+    Guid itemId,
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var item = await db.WishlistItems
+        .Include(x => x.Wishlist)
+        .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
+    if (item is null) return Results.NotFound(new { error = "Wishlist item not found." });
+    if (item.Wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+    db.WishlistItems.Remove(item);
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.NoContent();
 })
 .RequireAuthorization()
 .WithTags("Wishlists");

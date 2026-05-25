@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { apiRequest, clearToken, getToken, setToken } from "./api";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { apiRequest, buildWsUrl, clearToken, getToken, setToken } from "./api";
 
 type UserDto = {
   id: string;
@@ -40,6 +40,7 @@ type WishlistSummary = WishlistResponse;
 
 type PublicWishlistResponse = {
   id: string;
+  ownerUserId: string;
   title: string;
   description?: string | null;
   items: WishlistItem[];
@@ -83,12 +84,25 @@ type ConversationTarget = {
 };
 
 type MessageNotification = {
+  wishlistId: string;
+  shareToken: string;
   itemId: string;
   wishlistTitle: string;
   itemTitle: string;
   senderName: string;
   text: string;
   createdAtUtc: string;
+};
+
+type TimelineNotification =
+  | { id: string; kind: "message"; timestamp: string; message: MessageNotification }
+  | { id: string; kind: "event"; timestamp: string; event: NotificationInboxEvent };
+
+type ToastNotification = {
+  id: string;
+  title: string;
+  description: string;
+  action?: TimelineNotification;
 };
 
 const defaultPhoto =
@@ -129,6 +143,37 @@ function formatDate(value?: string | null): string {
   }).format(new Date(value));
 }
 
+function getTime(value?: string | null): number {
+  if (!value) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function sortByNewest<T>(items: T[], getTimestamp: (item: T) => string | null | undefined): T[] {
+  return [...items].sort((a, b) => getTime(getTimestamp(b)) - getTime(getTimestamp(a)));
+}
+
+function sortChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  return [...messages].sort((a, b) => getTime(a.createdAtUtc) - getTime(b.createdAtUtc));
+}
+
+function mergeChatMessage(messages: ChatMessage[], next: ChatMessage): ChatMessage[] {
+  const existingIndex = messages.findIndex((message) => message.id === next.id);
+  if (existingIndex >= 0) {
+    const copy = [...messages];
+    copy[existingIndex] = next;
+    return sortChatMessages(copy);
+  }
+
+  return sortChatMessages([...messages, next]);
+}
+
+function scrollToElement(id: string) {
+  window.setTimeout(() => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, 120);
+}
+
 function notificationTitle(eventType: string): string {
   if (eventType === "wishlist.item.reserved") return "Подарок забронирован";
   if (eventType === "wishlist.item.unreserved") return "Бронь подарка снята";
@@ -167,7 +212,11 @@ function GiftImage({ item }: { item: Pick<WishlistItem, "title" | "imageUrl"> })
 
 function App() {
   const routeShareToken = useMemo(getRouteShareToken, []);
-  const isPublicRoute = Boolean(routeShareToken);
+  const chatSocketRef = useRef<WebSocket | null>(null);
+  const chatNotificationsSocketRef = useRef<WebSocket | null>(null);
+  const myWishlistsRef = useRef<WishlistSummary[]>([]);
+  const seenTimelineNotificationIdsRef = useRef<Set<string>>(new Set());
+  const hasInitializedToastStackRef = useRef(false);
 
   const [token, setTokenState] = useState(getToken());
   const [me, setMe] = useState<UserDto | null>(null);
@@ -187,12 +236,21 @@ function App() {
   const [libraryTab, setLibraryTab] = useState<"created" | "giving">("created");
   const [wishlistMessage, setWishlistMessage] = useState("");
   const [wishlistError, setWishlistError] = useState("");
+  const [isEditingWishlist, setIsEditingWishlist] = useState(false);
+  const [editWishlistTitle, setEditWishlistTitle] = useState("");
+  const [editWishlistDescription, setEditWishlistDescription] = useState("");
 
   const [itemTitle, setItemTitle] = useState("");
   const [itemUrl, setItemUrl] = useState("");
   const [itemImageUrl, setItemImageUrl] = useState("");
   const [itemPrice, setItemPrice] = useState("");
   const [itemComment, setItemComment] = useState("");
+  const [editingItemId, setEditingItemId] = useState("");
+  const [editItemTitle, setEditItemTitle] = useState("");
+  const [editItemUrl, setEditItemUrl] = useState("");
+  const [editItemImageUrl, setEditItemImageUrl] = useState("");
+  const [editItemPrice, setEditItemPrice] = useState("");
+  const [editItemComment, setEditItemComment] = useState("");
 
   const [openLinkValue, setOpenLinkValue] = useState("");
   const [publicShareToken, setPublicShareToken] = useState(routeShareToken);
@@ -210,21 +268,44 @@ function App() {
   const [chatText, setChatText] = useState("");
   const [chatMessage, setChatMessage] = useState("");
   const [chatError, setChatError] = useState("");
+  const [toastNotifications, setToastNotifications] = useState<ToastNotification[]>([]);
 
   const publicLink = useMemo(() => {
     if (!createdWishlist?.shareToken) return "";
     return `${window.location.origin}/wishlist/${createdWishlist.shareToken}`;
   }, [createdWishlist]);
 
+  const isPublicRoute = Boolean(publicShareToken);
+
   const visibleInboxEvents = useMemo(() => {
     if (!me) return [];
     const ownedWishlistIds = new Set(myWishlists.map((wishlist) => wishlist.id));
-    return inboxEvents.filter((event) => event.ownerUserId === me.id || ownedWishlistIds.has(event.wishlistId));
+    const visible = inboxEvents.filter((event) => event.ownerUserId === me.id || ownedWishlistIds.has(event.wishlistId));
+    return sortByNewest(visible, (event) => event.occurredAtUtc || event.receivedAtUtc);
   }, [inboxEvents, me, myWishlists]);
+
+  const timelineNotifications = useMemo<TimelineNotification[]>(() => {
+    const messages = messageNotifications.map<TimelineNotification>((message) => ({
+      id: `message-${message.itemId}-${message.createdAtUtc}`,
+      kind: "message",
+      timestamp: message.createdAtUtc,
+      message
+    }));
+    const events = visibleInboxEvents.map<TimelineNotification>((event) => ({
+      id: `event-${event.eventId}`,
+      kind: "event",
+      timestamp: event.occurredAtUtc || event.receivedAtUtc,
+      event
+    }));
+
+    return sortByNewest([...messages, ...events], (item) => item.timestamp);
+  }, [messageNotifications, visibleInboxEvents]);
 
   const selectedPublicItem = useMemo(() => {
     return publicWishlist?.items.find((item) => item.id === selectedPublicItemId) ?? null;
   }, [publicWishlist, selectedPublicItemId]);
+
+  const isOwnPublicWishlist = Boolean(me && publicWishlist?.ownerUserId === me.id);
 
   const reservedByMe = useMemo(() => {
     if (!publicWishlist) return new Set<string>();
@@ -234,6 +315,37 @@ function App() {
         .map((reservation) => reservation.itemId)
     );
   }, [publicWishlist, reservations]);
+
+  useEffect(() => {
+    myWishlistsRef.current = myWishlists;
+  }, [myWishlists]);
+
+  function pushToast(title: string, description: string, action?: TimelineNotification) {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setToastNotifications((prev) => [{ id, title, description, action }, ...prev].slice(0, 5));
+    window.setTimeout(() => {
+      setToastNotifications((prev) => prev.filter((toast) => toast.id !== id));
+    }, 7000);
+  }
+
+  useEffect(() => {
+    const seenIds = seenTimelineNotificationIdsRef.current;
+    if (!hasInitializedToastStackRef.current) {
+      timelineNotifications.forEach((item) => seenIds.add(item.id));
+      hasInitializedToastStackRef.current = true;
+      return;
+    }
+
+    const freshItems = timelineNotifications.filter((item) => !seenIds.has(item.id));
+    freshItems.forEach((item) => {
+      seenIds.add(item.id);
+      if (item.kind === "message") {
+        pushToast("Новый вопрос по подарку", `${item.message.senderName}: ${item.message.text}`, item);
+      } else {
+        pushToast(notificationTitle(item.event.eventType), notificationDescription(item.event), item);
+      }
+    });
+  }, [timelineNotifications]);
 
   useEffect(() => {
     if (token) {
@@ -262,6 +374,46 @@ function App() {
   }, [me, isPublicRoute]);
 
   useEffect(() => {
+    if (!me || isPublicRoute) return;
+
+    const refreshNotifications = () => {
+      loadInbox().catch(() => void 0);
+      loadReservations().catch(() => void 0);
+      if (myWishlists.length > 0) {
+        loadMessageNotifications(myWishlists).catch(() => void 0);
+      }
+    };
+
+    const intervalId = window.setInterval(refreshNotifications, 3000);
+    return () => window.clearInterval(intervalId);
+  }, [me, isPublicRoute, myWishlists]);
+
+  useEffect(() => {
+    chatNotificationsSocketRef.current?.close();
+    chatNotificationsSocketRef.current = null;
+
+    if (!token || !me || isPublicRoute) return;
+
+    const socket = new WebSocket(buildWsUrl("/chat/notifications/ws", { access_token: token }));
+    chatNotificationsSocketRef.current = socket;
+
+    socket.onmessage = () => {
+      const currentWishlists = myWishlistsRef.current;
+      if (currentWishlists.length > 0) {
+        loadMessageNotifications(currentWishlists).catch(() => void 0);
+      }
+      loadInbox().catch(() => void 0);
+    };
+
+    return () => {
+      socket.close();
+      if (chatNotificationsSocketRef.current === socket) {
+        chatNotificationsSocketRef.current = null;
+      }
+    };
+  }, [token, me?.id, isPublicRoute]);
+
+  useEffect(() => {
     if (me && isPublicRoute) {
       loadReservations().catch(() => void 0);
     }
@@ -272,6 +424,48 @@ function App() {
       loadChatMessages(conversation.wishlistId, conversation.itemId, conversation.shareToken).catch(() => void 0);
     }
   }, [token, conversation?.wishlistId, conversation?.itemId]);
+
+  useEffect(() => {
+    chatSocketRef.current?.close();
+    chatSocketRef.current = null;
+
+    if (!token || !conversation) return;
+
+    const socket = new WebSocket(buildWsUrl("/chat/ws", {
+      wishlistId: conversation.wishlistId,
+      itemId: conversation.itemId,
+      shareToken: conversation.shareToken,
+      access_token: token
+    }));
+    chatSocketRef.current = socket;
+
+    socket.onmessage = (event) => {
+      try {
+        const incoming = JSON.parse(event.data) as ChatMessage;
+        const normalized = {
+          ...incoming,
+          isMine: me ? incoming.senderUserId === me.id : incoming.isMine
+        };
+        setChatMessages((prev) => mergeChatMessage(prev, normalized));
+        loadInbox().catch(() => void 0);
+        const currentWishlists = myWishlistsRef.current;
+        if (currentWishlists.length > 0) loadMessageNotifications(currentWishlists).catch(() => void 0);
+      } catch {
+        // Ignore malformed WebSocket messages and keep the chat open.
+      }
+    };
+
+    socket.onerror = () => {
+      setChatError("Не удалось подключиться к чату в реальном времени. Сообщения будут обновляться после отправки.");
+    };
+
+    return () => {
+      socket.close();
+      if (chatSocketRef.current === socket) {
+        chatSocketRef.current = null;
+      }
+    };
+  }, [token, conversation?.wishlistId, conversation?.itemId, conversation?.shareToken, me?.id]);
 
   async function loadMe() {
     const response = await apiRequest<UserDto>("/users/me");
@@ -329,6 +523,20 @@ function App() {
     setMe(null);
     setAuthMessage("");
     setAuthError("");
+  }
+
+  async function showDashboard() {
+    window.history.pushState(null, "", "/");
+    setPublicWishlist(null);
+    setPublicShareToken("");
+    setOpenLinkValue("");
+    setPublicMessage("");
+    setPublicError("");
+    setSelectedPublicItemId("");
+    setConversation(null);
+    loadMyWishlists().catch(() => void 0);
+    const nextReservations = await loadReservations();
+    setLibraryTab(nextReservations.length > 0 ? "giving" : "created");
   }
 
   async function handleCreateWishlist(e: FormEvent) {
@@ -404,7 +612,62 @@ function App() {
     setWishlistDescription("");
     setWishlistMessage("");
     setWishlistError("");
+    setIsEditingWishlist(false);
     setConversation(null);
+  }
+
+  function beginEditWishlist() {
+    if (!createdWishlist) return;
+    setEditWishlistTitle(createdWishlist.title);
+    setEditWishlistDescription(createdWishlist.description || "");
+    setIsEditingWishlist(true);
+    setWishlistMessage("");
+    setWishlistError("");
+  }
+
+  async function updateWishlist(e: FormEvent) {
+    e.preventDefault();
+    if (!createdWishlist) return;
+
+    setWishlistError("");
+    setWishlistMessage("");
+    try {
+      const response = await apiRequest<WishlistResponse>(`/wishlists/${createdWishlist.id}`, {
+        method: "PUT",
+        body: {
+          title: editWishlistTitle,
+          description: editWishlistDescription || null
+        }
+      });
+      setCreatedWishlist(response);
+      setMyWishlists((prev) => prev.map((wishlist) => wishlist.id === response.id ? response : wishlist));
+      setIsEditingWishlist(false);
+      setWishlistMessage("Wishlist обновлен.");
+      pushToast("Wishlist обновлен", response.title);
+    } catch (error) {
+      setWishlistError(explainError(error, "Не получилось обновить wishlist."));
+    }
+  }
+
+  async function deleteWishlist() {
+    if (!createdWishlist) return;
+    if (!window.confirm("Удалить wishlist вместе со всеми подарками?")) return;
+
+    const wishlistId = createdWishlist.id;
+    setWishlistError("");
+    setWishlistMessage("");
+    try {
+      await apiRequest<void>(`/wishlists/${wishlistId}`, { method: "DELETE" });
+      const nextWishlists = myWishlists.filter((wishlist) => wishlist.id !== wishlistId);
+      setMyWishlists(nextWishlists);
+      setCreatedWishlist(nextWishlists[0] ?? null);
+      setConversation(null);
+      setIsEditingWishlist(false);
+      setWishlistMessage("Wishlist удален.");
+      pushToast("Wishlist удален", "Список больше не доступен гостям.");
+    } catch (error) {
+      setWishlistError(explainError(error, "Не получилось удалить wishlist."));
+    }
   }
 
   async function copyPublicLink() {
@@ -443,28 +706,58 @@ function App() {
       setPublicError("Войдите или зарегистрируйтесь, чтобы забронировать подарок. Так владелец увидит, что подарок уже выбран.");
       return;
     }
+    if (isOwnPublicWishlist) {
+      setPublicError("Это ваш wishlist. Чтобы проверить бронирование, выйдите из аккаунта владельца и войдите под аккаунтом друга.");
+      return;
+    }
 
     setPublicError("");
     setPublicMessage("");
     try {
       await apiRequest<WishlistItem>(`/wishlists/${publicWishlist.id}/items/${itemId}/reserve`, { method: "POST", body: {} });
       setPublicMessage("Подарок забронирован. Спасибо, что предупредили остальных.");
+      pushToast("Подарок забронирован", "Бронь сохранена в вашем списке выбранных подарков.");
       await loadPublicWishlist(publicShareToken);
       await loadReservations();
+      setLibraryTab("giving");
     } catch (error) {
       setPublicError(explainError(error, "Не получилось забронировать подарок."));
     }
   }
 
+  async function unreserveItem(itemId: string) {
+    if (!publicWishlist) return;
+    if (!token) {
+      setPublicError("Войдите или зарегистрируйтесь, чтобы отменить бронь.");
+      return;
+    }
+
+    setPublicError("");
+    setPublicMessage("");
+    try {
+      await apiRequest<WishlistItem>(`/wishlists/${publicWishlist.id}/items/${itemId}/unreserve`, { method: "POST", body: {} });
+      setPublicMessage("Бронь снята. Подарок снова доступен для других.");
+      pushToast("Бронь отменена", "Подарок снова свободен.");
+      await loadPublicWishlist(publicShareToken);
+      await loadReservations();
+    } catch (error) {
+      setPublicError(explainError(error, "Не получилось отменить бронь."));
+    }
+  }
+
   async function loadReservations() {
-    if (!token) return;
+    if (!token) {
+      setReservations([]);
+      return [];
+    }
     const response = await apiRequest<MyReservation[]>("/wishlists/reservations/me");
     setReservations(response);
+    return response;
   }
 
   async function loadInbox() {
     const response = await apiRequest<NotificationInboxEvent[]>("/notifications/inbox", { auth: false });
-    setInboxEvents(response);
+    setInboxEvents(sortByNewest(response, (event) => event.occurredAtUtc || event.receivedAtUtc));
   }
 
   async function loadMessageNotifications(wishlists: WishlistSummary[]) {
@@ -482,6 +775,8 @@ function App() {
           const latestIncoming = [...messages].reverse().find((message) => !message.isMine);
           if (latestIncoming) {
             next.push({
+              wishlistId: wishlist.id,
+              shareToken: wishlist.shareToken,
               itemId: item.id,
               wishlistTitle: wishlist.title,
               itemTitle: item.title,
@@ -495,7 +790,7 @@ function App() {
         }
       }
     }
-    setMessageNotifications(next.sort((a, b) => new Date(b.createdAtUtc).getTime() - new Date(a.createdAtUtc).getTime()));
+    setMessageNotifications(sortByNewest(next, (message) => message.createdAtUtc));
   }
 
   function startPublicConversation(item: WishlistItem) {
@@ -520,6 +815,101 @@ function App() {
     loadChatMessages(createdWishlist.id, item.id, createdWishlist.shareToken).catch(() => void 0);
   }
 
+  function beginEditItem(item: WishlistItem) {
+    setEditingItemId(item.id);
+    setEditItemTitle(item.title);
+    setEditItemUrl(item.url || "");
+    setEditItemImageUrl(item.imageUrl || "");
+    setEditItemPrice(item.price === null || item.price === undefined ? "" : String(item.price));
+    setEditItemComment(item.comment || "");
+    setWishlistMessage("");
+    setWishlistError("");
+  }
+
+  function cancelEditItem() {
+    setEditingItemId("");
+    setEditItemTitle("");
+    setEditItemUrl("");
+    setEditItemImageUrl("");
+    setEditItemPrice("");
+    setEditItemComment("");
+  }
+
+  async function updateItem(e: FormEvent) {
+    e.preventDefault();
+    if (!createdWishlist || !editingItemId) return;
+
+    setWishlistError("");
+    setWishlistMessage("");
+    try {
+      await apiRequest<WishlistItem>(`/wishlists/${createdWishlist.id}/items/${editingItemId}`, {
+        method: "PUT",
+        body: {
+          title: editItemTitle,
+          url: editItemUrl || null,
+          imageUrl: editItemImageUrl || null,
+          price: editItemPrice ? Number(editItemPrice) : null,
+          comment: editItemComment || null
+        }
+      });
+      await loadMyWishlist(createdWishlist.id);
+      cancelEditItem();
+      setWishlistMessage("Подарок обновлен.");
+      pushToast("Подарок обновлен", editItemTitle);
+    } catch (error) {
+      setWishlistError(explainError(error, "Не получилось обновить подарок."));
+    }
+  }
+
+  async function deleteItem(item: WishlistItem) {
+    if (!createdWishlist) return;
+    if (!window.confirm(`Удалить подарок "${item.title}"?`)) return;
+
+    setWishlistError("");
+    setWishlistMessage("");
+    try {
+      await apiRequest<void>(`/wishlists/${createdWishlist.id}/items/${item.id}`, { method: "DELETE" });
+      await loadMyWishlist(createdWishlist.id);
+      if (editingItemId === item.id) cancelEditItem();
+      setWishlistMessage("Подарок удален.");
+      pushToast("Подарок удален", item.title);
+    } catch (error) {
+      setWishlistError(explainError(error, "Не получилось удалить подарок."));
+    }
+  }
+
+  async function openTimelineNotification(item: TimelineNotification) {
+    if (item.kind === "message") {
+      let wishlist = myWishlists.find((entry) => entry.id === item.message.wishlistId) ?? null;
+      if (!wishlist) {
+        wishlist = await apiRequest<WishlistResponse>(`/wishlists/${item.message.wishlistId}`).catch(() => null);
+      }
+      if (wishlist) {
+        setCreatedWishlist(wishlist);
+      }
+      setConversation({
+        wishlistId: item.message.wishlistId,
+        itemId: item.message.itemId,
+        shareToken: item.message.shareToken,
+        title: item.message.itemTitle
+      });
+      loadChatMessages(item.message.wishlistId, item.message.itemId, item.message.shareToken).catch(() => void 0);
+      scrollToElement(`owner-item-${item.message.itemId}`);
+      scrollToElement(`conversation-${item.message.itemId}`);
+      return;
+    }
+
+    let wishlist = myWishlists.find((entry) => entry.id === item.event.wishlistId) ?? null;
+    if (!wishlist) {
+      wishlist = await apiRequest<WishlistResponse>(`/wishlists/${item.event.wishlistId}`).catch(() => null);
+    }
+    if (wishlist) {
+      setCreatedWishlist(wishlist);
+    }
+    setConversation(null);
+    scrollToElement(`owner-item-${item.event.itemId}`);
+  }
+
   async function loadChatMessages(wishlistId: string, itemId: string, shareToken: string) {
     if (!token) {
       setChatMessages([]);
@@ -529,7 +919,7 @@ function App() {
     try {
       const query = new URLSearchParams({ wishlistId, itemId, shareToken });
       const response = await apiRequest<ChatMessage[]>(`/chat/messages?${query.toString()}`);
-      setChatMessages(response);
+      setChatMessages(sortChatMessages(response));
     } catch (error) {
       setChatError(explainError(error, "Не получилось загрузить сообщения."));
     }
@@ -543,19 +933,33 @@ function App() {
       return;
     }
 
+    const text = chatText.trim();
+    if (!text) {
+      setChatError("Введите сообщение.");
+      return;
+    }
+
     setChatError("");
     setChatMessage("");
     try {
+      const socket = chatSocketRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ text }));
+        setChatText("");
+        setChatMessage("Сообщение отправлено.");
+        return;
+      }
+
       const response = await apiRequest<ChatMessage>("/chat/messages", {
         method: "POST",
         body: {
           wishlistId: conversation.wishlistId,
           itemId: conversation.itemId,
           shareToken: conversation.shareToken,
-          text: chatText
+          text
         }
       });
-      setChatMessages((prev) => [...prev, response]);
+      setChatMessages((prev) => mergeChatMessage(prev, response));
       setChatText("");
       setChatMessage("Сообщение отправлено.");
       await loadInbox();
@@ -616,7 +1020,7 @@ function App() {
   );
 
   const chatPanel = conversation && (
-    <section className="panel conversation-panel">
+    <section className="panel conversation-panel" id={`conversation-${conversation.itemId}`}>
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Вопросы по подарку</p>
@@ -646,17 +1050,37 @@ function App() {
     </section>
   );
 
+  const notificationStack = (
+    <div className="toast-stack" aria-live="polite" aria-atomic="false">
+      {toastNotifications.map((toast) => (
+        <article
+          className={toast.action ? "toast clickable-toast" : "toast"}
+          key={toast.id}
+          onClick={() => toast.action && openTimelineNotification(toast.action)}
+          onKeyDown={(event) => {
+            if (toast.action && (event.key === "Enter" || event.key === " ")) openTimelineNotification(toast.action);
+          }}
+          tabIndex={toast.action ? 0 : undefined}
+        >
+          <strong>{toast.title}</strong>
+          <span>{toast.description}</span>
+        </article>
+      ))}
+    </div>
+  );
+
   if (isPublicRoute || publicWishlist) {
     return (
       <div className="app-shell public-page">
         <header className="topbar">
-          <a className="brand" href="/">wishlist service</a>
+          <button className="brand brand-button" type="button" onClick={showDashboard}>wishlist service</button>
           <div className="topbar-actions">
             {me ? <span className="user-pill">{me.displayName || me.email}</span> : <a className="secondary-link" href="#auth">Войти</a>}
-            {me && <a className="button secondary small" href="/">Мои вишлисты</a>}
+            {me && <button className="secondary small" onClick={showDashboard}>Мои вишлисты</button>}
             {me && <button className="secondary small" onClick={handleLogout}>Выйти</button>}
           </div>
         </header>
+        {notificationStack}
 
         <main className="page">
           {!publicWishlist && (
@@ -676,7 +1100,7 @@ function App() {
 
               <section className="gift-grid">
                 {publicWishlist.items.map((item) => (
-                  <article className="product-card" key={item.id}>
+                  <article className="product-card" id={`public-item-${item.id}`} key={item.id}>
                     <GiftImage item={item} />
                     <div className="product-content">
                       <div className="product-title">
@@ -691,9 +1115,13 @@ function App() {
                         {item.url && <a href={item.url} target="_blank" rel="noreferrer">Открыть магазин</a>}
                       </div>
                       <div className="card-actions">
-                        <button disabled={item.isReserved} onClick={() => reserveItem(item.id)}>
-                          {reservedByMe.has(item.id) ? "Вы забронировали" : item.isReserved ? "Уже занято" : "Забронировать"}
-                        </button>
+                        {reservedByMe.has(item.id) ? (
+                          <button className="secondary" onClick={() => unreserveItem(item.id)}>Отменить бронь</button>
+                        ) : (
+                          <button disabled={item.isReserved || isOwnPublicWishlist} onClick={() => reserveItem(item.id)}>
+                            {isOwnPublicWishlist ? "Ваш wishlist" : item.isReserved ? "Уже занято" : "Забронировать"}
+                          </button>
+                        )}
                         <button className="secondary" onClick={() => startPublicConversation(item)}>Задать вопрос</button>
                       </div>
                     </div>
@@ -717,10 +1145,23 @@ function App() {
         <a className="brand" href="/">wishlist service</a>
         <div className="topbar-actions">
           {me ? <span className="user-pill">{me.displayName || me.email}</span> : <a className="secondary-link" href="#auth">Войти</a>}
-          {me && <a className="button secondary small" href="#my-wishlists" onClick={() => loadMyWishlists().catch(() => void 0)}>Мои вишлисты</a>}
+          {me && (
+            <a
+              className="button secondary small"
+              href="#my-wishlists"
+              onClick={async () => {
+                loadMyWishlists().catch(() => void 0);
+                const nextReservations = await loadReservations();
+                if (nextReservations.length > 0) setLibraryTab("giving");
+              }}
+            >
+              Мои вишлисты
+            </a>
+          )}
           {me && <button className="secondary small" onClick={handleLogout}>Выйти</button>}
         </div>
       </header>
+      {notificationStack}
 
       <main className="page">
         <section className="hero">
@@ -829,6 +1270,8 @@ function App() {
                   {createdWishlist && (
                     <div className="button-column">
                       <button className="secondary" onClick={copyPublicLink}>Скопировать ссылку</button>
+                      <button className="secondary" onClick={beginEditWishlist}>Редактировать</button>
+                      <button className="secondary danger" onClick={deleteWishlist}>Удалить</button>
                       <button className="secondary" onClick={beginNewWishlist}>Создать ещё один wishlist</button>
                     </div>
                   )}
@@ -847,10 +1290,28 @@ function App() {
                     <button type="submit">Создать wishlist</button>
                   </form>
                 ) : (
-                  <div className="share-preview">
-                    <span>Публичная ссылка</span>
-                    <strong>{publicLink}</strong>
-                  </div>
+                  <>
+                    {isEditingWishlist && (
+                      <form className="stack-form edit-form" onSubmit={updateWishlist}>
+                        <label>
+                          Название
+                          <input value={editWishlistTitle} onChange={(e) => setEditWishlistTitle(e.target.value)} />
+                        </label>
+                        <label>
+                          Описание
+                          <input value={editWishlistDescription} onChange={(e) => setEditWishlistDescription(e.target.value)} />
+                        </label>
+                        <div className="form-actions">
+                          <button type="submit">Сохранить</button>
+                          <button className="secondary" type="button" onClick={() => setIsEditingWishlist(false)}>Отмена</button>
+                        </div>
+                      </form>
+                    )}
+                    <div className="share-preview">
+                      <span>Публичная ссылка</span>
+                      <strong>{publicLink}</strong>
+                    </div>
+                  </>
                 )}
 
                 {(wishlistMessage || wishlistError) && <p className={wishlistError ? "notice error" : "notice ok"}>{wishlistError || wishlistMessage}</p>}
@@ -893,7 +1354,7 @@ function App() {
               {createdWishlist && (
                 <section className="gift-grid owner-grid">
                   {createdWishlist.items.map((item) => (
-                    <article className="product-card" key={item.id}>
+                    <article className="product-card" id={`owner-item-${item.id}`} key={item.id}>
                       <GiftImage item={item} />
                       <div className="product-content">
                         <div className="product-title">
@@ -905,7 +1366,39 @@ function App() {
                           <strong>{formatPrice(item.price)}</strong>
                           {item.url && <a href={item.url} target="_blank" rel="noreferrer">Магазин</a>}
                         </div>
-                        <button className="secondary" onClick={() => startOwnerConversation(item)}>Открыть вопросы</button>
+                        {editingItemId === item.id && (
+                          <form className="item-form edit-item-form" onSubmit={updateItem}>
+                            <label>
+                              Название
+                              <input value={editItemTitle} onChange={(e) => setEditItemTitle(e.target.value)} />
+                            </label>
+                            <label>
+                              Фото
+                              <input value={editItemImageUrl} onChange={(e) => setEditItemImageUrl(e.target.value)} />
+                            </label>
+                            <label>
+                              Магазин
+                              <input value={editItemUrl} onChange={(e) => setEditItemUrl(e.target.value)} />
+                            </label>
+                            <label>
+                              Цена
+                              <input value={editItemPrice} onChange={(e) => setEditItemPrice(e.target.value)} inputMode="decimal" />
+                            </label>
+                            <label className="wide">
+                              Комментарий
+                              <input value={editItemComment} onChange={(e) => setEditItemComment(e.target.value)} />
+                            </label>
+                            <div className="form-actions wide">
+                              <button type="submit">Сохранить</button>
+                              <button className="secondary" type="button" onClick={cancelEditItem}>Отмена</button>
+                            </div>
+                          </form>
+                        )}
+                        <div className="card-actions">
+                          <button className="secondary" onClick={() => startOwnerConversation(item)}>Открыть вопросы</button>
+                          <button className="secondary" onClick={() => beginEditItem(item)}>Редактировать</button>
+                          <button className="secondary danger" onClick={() => deleteItem(item)}>Удалить</button>
+                        </div>
                       </div>
                     </article>
                   ))}
@@ -936,25 +1429,42 @@ function App() {
                 <p className="eyebrow">Уведомления</p>
                 <h2>События</h2>
                 <div className="compact-list">
-                  {messageNotifications.map((message) => (
-                    <article key={`${message.itemId}-${message.createdAtUtc}`}>
-                      <div>
-                        <strong>Новый вопрос по подарку</strong>
-                        <span>{message.senderName}: {message.text}</span>
-                        <span>{message.wishlistTitle} · {message.itemTitle} · {formatDate(message.createdAtUtc)}</span>
-                      </div>
-                    </article>
+                  {timelineNotifications.map((item) => (
+                    item.kind === "message" ? (
+                      <article
+                        key={item.id}
+                        className="clickable-list-item"
+                        onClick={() => openTimelineNotification(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
+                        }}
+                        tabIndex={0}
+                      >
+                        <div>
+                          <strong>Новый вопрос по подарку</strong>
+                          <span>{item.message.senderName}: {item.message.text}</span>
+                          <span>{item.message.wishlistTitle} · {item.message.itemTitle} · {formatDate(item.message.createdAtUtc)}</span>
+                        </div>
+                      </article>
+                    ) : (
+                      <article
+                        key={item.id}
+                        className="clickable-list-item"
+                        onClick={() => openTimelineNotification(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
+                        }}
+                        tabIndex={0}
+                      >
+                        <div>
+                          <strong>{notificationTitle(item.event.eventType)}</strong>
+                          <span>{notificationDescription(item.event)}</span>
+                          <span>{formatDate(item.event.occurredAtUtc || item.event.receivedAtUtc)}</span>
+                        </div>
+                      </article>
+                    )
                   ))}
-                  {visibleInboxEvents.map((event) => (
-                    <article key={event.eventId}>
-                      <div>
-                        <strong>{notificationTitle(event.eventType)}</strong>
-                        <span>{notificationDescription(event)}</span>
-                        <span>{formatDate(event.occurredAtUtc || event.receivedAtUtc)}</span>
-                      </div>
-                    </article>
-                  ))}
-                  {messageNotifications.length === 0 && visibleInboxEvents.length === 0 && <p className="empty">Новых событий пока нет.</p>}
+                  {timelineNotifications.length === 0 && <p className="empty">Новых событий пока нет.</p>}
                 </div>
               </section>
             </aside>

@@ -2,7 +2,11 @@ namespace WishlistService.Contracts;
 
 public record CreateWishlistRequest(string Title, string? Description);
 
+public record UpdateWishlistRequest(string Title, string? Description);
+
 public record AddWishlistItemRequest(string Title, string? Url, string? ImageUrl, decimal? Price, string? Comment);
+
+public record UpdateWishlistItemRequest(string Title, string? Url, string? ImageUrl, decimal? Price, string? Comment);
 
 public record WishlistItemResponse(
     Guid Id,
