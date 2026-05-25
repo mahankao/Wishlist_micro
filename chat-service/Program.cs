@@ -157,7 +157,7 @@ app.MapGet("/chat/messages", async (
         .Take(200)
         .ToListAsync(cancellationToken);
     var displayNames = await LoadDisplayNamesAsync(chatMessages.Select(x => x.SenderUserId), userServiceClient, cancellationToken);
-    var messages = chatMessages.Select(x => ToResponse(x, userId.Value, displayNames)).ToList();
+    var messages = chatMessages.Select(x => ToResponse(x, userId.Value, accessCheck.OwnerUserId!.Value, displayNames)).ToList();
 
     return Results.Ok(messages);
 })
@@ -176,7 +176,7 @@ app.MapPost("/chat/messages", async (
     if (userId is null) return Results.Unauthorized();
 
     // Сообщение можно отправить только в существующую комнату wishlist item.
-    var text = request.Text.Trim();
+    var text = request.Text?.Trim() ?? "";
     if (string.IsNullOrWhiteSpace(text) || text.Length > 2000)
     {
         return Results.BadRequest(new { error = "Text is required and must be at most 2000 characters." });
@@ -197,8 +197,17 @@ app.MapPost("/chat/messages", async (
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.ChatMessagesSent.Inc();
 
-    var displayNames = new Dictionary<Guid, string> { [userId.Value] = GetDisplayName(principal) };
-    return Results.Ok(ToResponse(message, userId.Value, displayNames));
+    var displayName = GetDisplayName(principal);
+    if (displayName == "anonymous")
+    {
+        var user = await userServiceClient.GetUserAsync(userId.Value, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(user?.DisplayName))
+        {
+            displayName = user.DisplayName;
+        }
+    }
+    var displayNames = new Dictionary<Guid, string> { [userId.Value] = displayName };
+    return Results.Ok(ToResponse(message, userId.Value, accessCheck.OwnerUserId!.Value, displayNames));
 })
 .RequireAuthorization()
 .WithTags("Chat");
@@ -289,6 +298,7 @@ app.Map("/chat/ws", async (
                 ToResponse(
                     message,
                     Guid.Empty,
+                    accessCheck.OwnerUserId!.Value,
                     new Dictionary<Guid, string> { [userId.Value] = GetDisplayName(principal) }
                 ),
                 webSocketJsonOptions
@@ -328,12 +338,24 @@ static string GetDisplayName(ClaimsPrincipal principal) =>
 static ChatMessageResponse ToResponse(
     ChatMessage message,
     Guid currentUserId,
+    Guid ownerUserId,
     IReadOnlyDictionary<Guid, string> displayNames)
 {
-    var senderDisplayName = displayNames.TryGetValue(message.SenderUserId, out var displayName) &&
-                            !string.IsNullOrWhiteSpace(displayName)
-        ? displayName
-        : "anonymous";
+    var senderDisplayName = "Анонимный гость";
+    if (message.SenderUserId == ownerUserId)
+    {
+        senderDisplayName = displayNames.TryGetValue(message.SenderUserId, out var ownerDisplayName) &&
+                            !string.IsNullOrWhiteSpace(ownerDisplayName)
+            ? ownerDisplayName
+            : "Владелец wishlist";
+    }
+    else if (message.SenderUserId == currentUserId && currentUserId != Guid.Empty)
+    {
+        senderDisplayName = displayNames.TryGetValue(message.SenderUserId, out var guestDisplayName) &&
+                            !string.IsNullOrWhiteSpace(guestDisplayName)
+            ? guestDisplayName
+            : "Гость";
+    }
 
     return new ChatMessageResponse(
         message.Id,
@@ -364,7 +386,7 @@ static async Task<Dictionary<Guid, string>> LoadDisplayNamesAsync(
     return displayNames;
 }
 
-static async Task<(IResult? Error, Guid? WishlistId)> EnsureAccessAsync(
+static async Task<(IResult? Error, Guid? WishlistId, Guid? OwnerUserId)> EnsureAccessAsync(
     Guid userId,
     Guid shareToken,
     Guid itemId,
@@ -373,14 +395,14 @@ static async Task<(IResult? Error, Guid? WishlistId)> EnsureAccessAsync(
     CancellationToken cancellationToken)
 {
     var userLookup = await userServiceClient.UserExistsAsync(userId, cancellationToken);
-    if (userLookup == UserLookupResult.NotFound) return (Results.NotFound(new { error = "User not found." }), null);
-    if (userLookup == UserLookupResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null);
+    if (userLookup == UserLookupResult.NotFound) return (Results.NotFound(new { error = "User not found." }), null, null);
+    if (userLookup == UserLookupResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null, null);
 
     var roomLookup = await wishlistServiceClient.ValidateRoomAsync(shareToken, itemId, cancellationToken);
-    if (roomLookup.Result == RoomValidationResult.NotFound) return (Results.NotFound(new { error = "Chat room not found." }), null);
-    if (roomLookup.Result == RoomValidationResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null);
+    if (roomLookup.Result == RoomValidationResult.NotFound) return (Results.NotFound(new { error = "Chat room not found." }), null, null);
+    if (roomLookup.Result == RoomValidationResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null, null);
 
-    return (null, roomLookup.WishlistId);
+    return (null, roomLookup.WishlistId, roomLookup.OwnerUserId);
 }
 
 static async Task MigrateDatabaseAsync(IServiceProvider services)

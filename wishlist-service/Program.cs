@@ -156,6 +156,25 @@ app.MapPost("/wishlists", async (
 .RequireAuthorization()
 .WithTags("Wishlists");
 
+app.MapGet("/wishlists", async (
+    ClaimsPrincipal principal,
+    WishlistDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var ownerUserId = GetUserId(principal);
+    if (ownerUserId is null) return Results.Unauthorized();
+
+    var wishlists = await db.Wishlists
+        .Include(x => x.Items.OrderBy(i => i.CreatedAtUtc))
+        .Where(x => x.OwnerUserId == ownerUserId.Value)
+        .OrderByDescending(x => x.CreatedAtUtc)
+        .ToListAsync(cancellationToken);
+
+    return Results.Ok(wishlists.Select(ToWishlistResponse).ToList());
+})
+.RequireAuthorization()
+.WithTags("Wishlists");
+
 app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     Guid wishlistId,
     AddWishlistItemRequest request,
@@ -174,8 +193,9 @@ app.MapPost("/wishlists/{wishlistId:guid}/items", async (
 
     var title = request.Title.Trim();
     var url = request.Url?.Trim();
+    var imageUrl = request.ImageUrl?.Trim();
     var comment = request.Comment?.Trim();
-    if (!IsValidItemPayload(title, url, request.Price, comment, out var validationError))
+    if (!IsValidItemPayload(title, url, imageUrl, request.Price, comment, out var validationError))
     {
         return Results.BadRequest(new { error = validationError });
     }
@@ -192,6 +212,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items", async (
         WishlistId = wishlist.Id,
         Title = title,
         Url = string.IsNullOrWhiteSpace(url) ? null : url,
+        ImageUrl = string.IsNullOrWhiteSpace(imageUrl) ? null : imageUrl,
         Price = request.Price,
         Comment = string.IsNullOrWhiteSpace(comment) ? null : comment
     };
@@ -219,6 +240,7 @@ app.MapGet("/wishlists/reservations/me", async (
         .OrderByDescending(x => x.ReservedAtUtc)
         .Select(x => new MyReservedItemResponse(
             x.WishlistId,
+            x.Wishlist.ShareToken,
             x.Wishlist.Title,
             x.Id,
             x.Title,
@@ -417,7 +439,7 @@ static bool IsValidWishlistPayload(string title, string? description)
     return true;
 }
 
-static bool IsValidItemPayload(string title, string? url, decimal? price, string? comment, out string error)
+static bool IsValidItemPayload(string title, string? url, string? imageUrl, decimal? price, string? comment, out string error)
 {
     if (string.IsNullOrWhiteSpace(title) || title.Length > 200)
     {
@@ -435,18 +457,38 @@ static bool IsValidItemPayload(string title, string? url, decimal? price, string
         return false;
     }
 
-    if (!string.IsNullOrWhiteSpace(url))
+    if (!IsValidAbsoluteHttpUrl(url, "Url", out error))
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
-        {
-            error = "Url must be a valid absolute URL.";
-            return false;
-        }
-        if (uri.Scheme is not ("http" or "https"))
-        {
-            error = "Url scheme must be http or https.";
-            return false;
-        }
+        return false;
+    }
+
+    if (!IsValidAbsoluteHttpUrl(imageUrl, "ImageUrl", out error))
+    {
+        return false;
+    }
+
+    error = string.Empty;
+    return true;
+}
+
+static bool IsValidAbsoluteHttpUrl(string? url, string fieldName, out string error)
+{
+    if (string.IsNullOrWhiteSpace(url))
+    {
+        error = string.Empty;
+        return true;
+    }
+
+    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+    {
+        error = $"{fieldName} must be a valid absolute URL.";
+        return false;
+    }
+
+    if (uri.Scheme is not ("http" or "https"))
+    {
+        error = $"{fieldName} scheme must be http or https.";
+        return false;
     }
 
     error = string.Empty;
@@ -470,6 +512,7 @@ static WishlistResponse ToWishlistResponse(Wishlist wishlist) =>
 static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
     new(
         wishlist.Id,
+        wishlist.OwnerUserId,
         wishlist.Title,
         wishlist.Description,
         wishlist.Items
@@ -479,7 +522,7 @@ static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
     );
 
 static WishlistItemResponse ToItemResponse(WishlistItem item) =>
-    new(item.Id, item.Title, item.Url, item.Price, item.Comment, item.ReservedByUserId is not null, item.ReservedAtUtc, item.CreatedAtUtc);
+    new(item.Id, item.Title, item.Url, item.ImageUrl, item.Price, item.Comment, item.ReservedByUserId is not null, item.ReservedAtUtc, item.CreatedAtUtc);
 
 static async Task MigrateDatabaseAsync(IServiceProvider services)
 {

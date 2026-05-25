@@ -2,12 +2,13 @@ namespace WishlistService.Contracts;
 
 public record CreateWishlistRequest(string Title, string? Description);
 
-public record AddWishlistItemRequest(string Title, string? Url, decimal? Price, string? Comment);
+public record AddWishlistItemRequest(string Title, string? Url, string? ImageUrl, decimal? Price, string? Comment);
 
 public record WishlistItemResponse(
     Guid Id,
     string Title,
     string? Url,
+    string? ImageUrl,
     decimal? Price,
     string? Comment,
     bool IsReserved,
@@ -27,6 +28,7 @@ public record WishlistResponse(
 
 public record PublicWishlistResponse(
     Guid Id,
+    Guid OwnerUserId,
     string Title,
     string? Description,
     IReadOnlyList<WishlistItemResponse> Items
@@ -34,6 +36,7 @@ public record PublicWishlistResponse(
 
 public record MyReservedItemResponse(
     Guid WishlistId,
+    Guid ShareToken,
     string WishlistTitle,
     Guid ItemId,
     string ItemTitle,

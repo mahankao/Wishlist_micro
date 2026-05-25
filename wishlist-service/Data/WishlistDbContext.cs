@@ -33,6 +33,7 @@ public class WishlistDbContext(DbContextOptions<WishlistDbContext> options) : Db
 
             entity.Property(x => x.Title).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Url).HasMaxLength(1000);
+            entity.Property(x => x.ImageUrl).HasMaxLength(1000);
             entity.Property(x => x.Price).HasColumnType("numeric(12,2)");
             entity.Property(x => x.Comment).HasMaxLength(1000);
             entity.Property(x => x.ReservedByUserId).HasColumnName("reserved_by_user_id");

@@ -4,7 +4,7 @@ namespace ChatService.Integration;
 
 public record WishlistItemLite(Guid Id);
 
-public record PublicWishlistLite(Guid Id, IReadOnlyList<WishlistItemLite> Items);
+public record PublicWishlistLite(Guid Id, Guid OwnerUserId, IReadOnlyList<WishlistItemLite> Items);
 
 public enum RoomValidationResult
 {
@@ -13,7 +13,7 @@ public enum RoomValidationResult
     Unavailable
 }
 
-public record RoomValidation(RoomValidationResult Result, Guid? WishlistId = null);
+public record RoomValidation(RoomValidationResult Result, Guid? WishlistId = null, Guid? OwnerUserId = null);
 
 public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServiceOptions> options)
 {
@@ -40,7 +40,7 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
                     var payload = await response.Content.ReadFromJsonAsync<PublicWishlistLite>(cancellationToken: linkedCts.Token);
                     if (payload is null) return new RoomValidation(RoomValidationResult.Unavailable);
                     return payload.Items.Any(x => x.Id == itemId)
-                        ? new RoomValidation(RoomValidationResult.Valid, payload.Id)
+                        ? new RoomValidation(RoomValidationResult.Valid, payload.Id, payload.OwnerUserId)
                         : new RoomValidation(RoomValidationResult.NotFound);
                 }
             }

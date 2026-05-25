@@ -7,6 +7,7 @@ public class WishlistItem
     public Wishlist Wishlist { get; set; } = null!;
     public string Title { get; set; } = string.Empty;
     public string? Url { get; set; }
+    public string? ImageUrl { get; set; }
     public decimal? Price { get; set; }
     public string? Comment { get; set; }
     public Guid? ReservedByUserId { get; set; }
