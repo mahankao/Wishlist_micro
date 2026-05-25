@@ -80,7 +80,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             {
                 var accessToken = context.Request.Query["access_token"];
                 var path = context.HttpContext.Request.Path;
-                if (!string.IsNullOrWhiteSpace(accessToken) && path.StartsWithSegments("/chat/ws"))
+                if (!string.IsNullOrWhiteSpace(accessToken) &&
+                    (path.StartsWithSegments("/chat/ws") || path.StartsWithSegments("/chat/notifications/ws")))
                 {
                     context.Token = accessToken;
                 }
@@ -170,6 +171,7 @@ app.MapPost("/chat/messages", async (
     ChatDbContext db,
     UserServiceClient userServiceClient,
     WishlistServiceClient wishlistServiceClient,
+    ChatConnectionManager connectionManager,
     CancellationToken cancellationToken) =>
 {
     var userId = GetUserId(principal);
@@ -207,7 +209,70 @@ app.MapPost("/chat/messages", async (
         }
     }
     var displayNames = new Dictionary<Guid, string> { [userId.Value] = displayName };
-    return Results.Ok(ToResponse(message, userId.Value, accessCheck.OwnerUserId!.Value, displayNames));
+    var response = ToResponse(message, userId.Value, accessCheck.OwnerUserId!.Value, displayNames);
+    var roomKey = $"{accessCheck.WishlistId.Value:N}:{request.ItemId:N}";
+    var broadcastPayload = JsonSerializer.Serialize(
+        ToResponse(message, Guid.Empty, accessCheck.OwnerUserId!.Value, displayNames),
+        webSocketJsonOptions
+    );
+    await connectionManager.BroadcastAsync(roomKey, broadcastPayload, cancellationToken);
+    await BroadcastOwnerChatNotificationAsync(
+        connectionManager,
+        accessCheck.OwnerUserId!.Value,
+        userId.Value,
+        accessCheck.WishlistId.Value,
+        request.ItemId,
+        webSocketJsonOptions,
+        cancellationToken);
+
+    return Results.Ok(response);
+})
+.RequireAuthorization()
+.WithTags("Chat");
+
+app.Map("/chat/notifications/ws", async (
+    HttpContext context,
+    ClaimsPrincipal principal,
+    ChatConnectionManager connectionManager) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsync("WebSocket request expected.");
+        return;
+    }
+
+    var userId = GetUserId(principal);
+    if (userId is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return;
+    }
+
+    var socket = await context.WebSockets.AcceptWebSocketAsync();
+    var roomKey = GetUserNotificationRoomKey(userId.Value);
+    var connectionId = connectionManager.AddConnection(roomKey, socket);
+    var buffer = new byte[256];
+
+    try
+    {
+        while (socket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
+        {
+            var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), context.RequestAborted);
+            if (result.MessageType == WebSocketMessageType.Close) break;
+        }
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+    catch (WebSocketException) { }
+    finally
+    {
+        connectionManager.RemoveConnection(roomKey, connectionId);
+        if (socket.State != WebSocketState.Closed && socket.State != WebSocketState.Aborted)
+        {
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", CancellationToken.None);
+        }
+        socket.Dispose();
+    }
 })
 .RequireAuthorization()
 .WithTags("Chat");
@@ -304,6 +369,14 @@ app.Map("/chat/ws", async (
                 webSocketJsonOptions
             );
             await connectionManager.BroadcastAsync(roomKey, outgoing, context.RequestAborted);
+            await BroadcastOwnerChatNotificationAsync(
+                connectionManager,
+                accessCheck.OwnerUserId!.Value,
+                userId.Value,
+                accessCheck.WishlistId.Value,
+                itemId,
+                webSocketJsonOptions,
+                context.RequestAborted);
         }
     }
     catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
@@ -334,6 +407,30 @@ static string GetDisplayName(ClaimsPrincipal principal) =>
     principal.FindFirstValue("display_name")
     ?? principal.FindFirstValue(ClaimTypes.Name)
     ?? "anonymous";
+
+static string GetUserNotificationRoomKey(Guid userId) => $"user:{userId:N}:chat-notifications";
+
+static Task BroadcastOwnerChatNotificationAsync(
+    ChatConnectionManager connectionManager,
+    Guid ownerUserId,
+    Guid senderUserId,
+    Guid wishlistId,
+    Guid itemId,
+    JsonSerializerOptions jsonOptions,
+    CancellationToken cancellationToken)
+{
+    if (ownerUserId == senderUserId) return Task.CompletedTask;
+
+    var payload = JsonSerializer.Serialize(new
+    {
+        Type = "chat.message.created",
+        WishlistId = wishlistId,
+        ItemId = itemId,
+        OccurredAtUtc = DateTime.UtcNow
+    }, jsonOptions);
+
+    return connectionManager.BroadcastAsync(GetUserNotificationRoomKey(ownerUserId), payload, cancellationToken);
+}
 
 static ChatMessageResponse ToResponse(
     ChatMessage message,

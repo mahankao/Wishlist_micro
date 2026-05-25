@@ -65,6 +65,12 @@ button.secondary,
   color: #24312f;
 }
 
+button.danger,
+.button.danger {
+  border-color: #efb6a4;
+  color: #9b452d;
+}
+
 button.small {
   min-height: 36px;
   padding: 0 12px;
@@ -139,6 +145,18 @@ h3 {
   font-size: 24px;
   font-weight: 900;
   letter-spacing: 0;
+}
+
+.brand-button {
+  min-height: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #17211f;
+}
+
+.brand-button:hover {
+  box-shadow: none;
 }
 
 .brand::before {
@@ -304,6 +322,11 @@ h3 {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.88);
   box-shadow: 0 16px 42px rgba(55, 70, 64, 0.08);
+  scroll-margin-top: 96px;
+}
+
+.conversation-panel {
+  scroll-margin-top: 96px;
 }
 
 .panel,
@@ -331,6 +354,25 @@ h3 {
 
 .item-form .wide {
   grid-column: span 3;
+}
+
+.edit-form {
+  margin-top: 14px;
+}
+
+.edit-item-form {
+  grid-template-columns: 1fr;
+  margin-top: 12px;
+}
+
+.edit-item-form .wide {
+  grid-column: span 1;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 label {
@@ -596,6 +638,18 @@ input::placeholder {
   background: #fbf7ef;
 }
 
+.compact-list .clickable-list-item {
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.compact-list .clickable-list-item:hover,
+.compact-list .clickable-list-item:focus-visible {
+  background: #f3eadc;
+  outline: none;
+  transform: translateY(-1px);
+}
+
 .compact-list span,
 .empty {
   color: #60706b;
@@ -617,6 +671,44 @@ input::placeholder {
 .notice.error {
   background: #fde3d8;
   color: #9b452d;
+}
+
+.toast-stack {
+  position: fixed;
+  top: 84px;
+  right: 24px;
+  z-index: 20;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d8c7ad;
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #fffaf2;
+  box-shadow: 0 16px 40px rgba(46, 34, 20, 0.16);
+  color: #2a332f;
+  pointer-events: auto;
+}
+
+.clickable-toast {
+  cursor: pointer;
+}
+
+.clickable-toast:hover,
+.clickable-toast:focus-visible {
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.toast span {
+  color: #60706b;
+  line-height: 1.4;
 }
 
 @media (max-width: 1020px) {
@@ -674,6 +766,12 @@ input::placeholder {
 }
 
 @media (max-width: 660px) {
+  .toast-stack {
+    top: 72px;
+    right: 10px;
+    width: calc(100vw - 20px);
+  }
+
   .page {
     width: min(100% - 20px, 1180px);
     padding-top: 22px;
