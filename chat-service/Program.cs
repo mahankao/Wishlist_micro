@@ -2,9 +2,11 @@ using System.Net.WebSockets;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using ChatService.Config;
 using ChatService.Contracts;
 using ChatService.Data;
 using ChatService.Integration;
+using ChatService.Messaging;
 using ChatService.Models;
 using ChatService.Observability;
 using ChatService.Realtime;
@@ -54,6 +56,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<UserServiceOptions>(builder.Configuration.GetSection(UserServiceOptions.SectionName));
 builder.Services.Configure<WishlistServiceOptions>(builder.Configuration.GetSection(WishlistServiceOptions.SectionName));
+builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection(RabbitMqOptions.SectionName));
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Key));
@@ -112,6 +115,7 @@ builder.Services.AddHttpClient<WishlistServiceClient>((serviceProvider, client) 
 .AddHttpMessageHandler<CorrelationHeaderHandler>();
 
 builder.Services.AddSingleton<ChatConnectionManager>();
+builder.Services.AddHostedService<WishlistCreatedConsumerHostedService>();
 
 var app = builder.Build();
 var webSocketJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);

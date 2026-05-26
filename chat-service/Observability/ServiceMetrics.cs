@@ -35,4 +35,8 @@ public static class ServiceMetrics
     public static readonly Counter ChatMessagesSent = Metrics.CreateCounter(
         "chat_messages_sent_total",
         "Total number of chat messages sent.");
+
+    public static readonly Counter WishlistCreatedEventsConsumed = Metrics.CreateCounter(
+        "chat_wishlist_created_events_consumed_total",
+        "Total number of wishlist.created events consumed by chat-service.");
 }
