@@ -149,6 +149,10 @@ app.MapPost("/auth/login", async (LoginRequest request, UserDbContext db, Passwo
 })
 .WithTags("Auth");
 
+app.MapGet("/auth/validate", () => Results.NoContent())
+.RequireAuthorization()
+.WithTags("Auth");
+
 app.MapGet("/users/me", async (ClaimsPrincipal principal, UserDbContext db) =>
 {
     var userIdRaw = principal.FindFirstValue(ClaimTypes.NameIdentifier)
