@@ -116,9 +116,18 @@ services:
       WishlistService__BaseUrl: http://wishlist-service:8080
       WishlistService__TimeoutSeconds: 2
       WishlistService__RetryCount: 2
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Port: 5672
+      RabbitMq__Username: ${RABBITMQ_USER:-guest}
+      RabbitMq__Password: ${RABBITMQ_PASSWORD:-guest}
+      RabbitMq__VirtualHost: /
+      RabbitMq__Exchange: wishlist.events
+      RabbitMq__Queue: chat.wishlist-created
     depends_on:
       chat-db:
         condition: service_healthy
+      rabbitmq:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health | grep -q '\"status\":\"ok\"'"]
       interval: 10s

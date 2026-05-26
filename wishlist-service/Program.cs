@@ -148,6 +148,16 @@ app.MapPost("/wishlists", async (
     };
 
     db.Wishlists.Add(wishlist);
+    EnqueueWishlistCreatedOutboxEvent(
+        db,
+        new WishlistCreatedEvent(
+            Guid.NewGuid(),
+            "wishlist.created",
+            wishlist.Id,
+            wishlist.OwnerUserId,
+            wishlist.Title,
+            wishlist.CreatedAtUtc));
+
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.WishlistsCreated.Inc();
 
@@ -667,6 +677,17 @@ static async Task MigrateDatabaseAsync(IServiceProvider services)
 static void EnqueueOutboxEvent(WishlistDbContext db, WishlistItemReservationEvent message)
 {
     // Пока RabbitMQ недоступен, событие остается в outbox и будет опубликовано следующей итерацией worker-а.
+    db.OutboxMessages.Add(new OutboxMessage
+    {
+        Id = message.EventId,
+        Type = message.EventType,
+        Payload = System.Text.Json.JsonSerializer.Serialize(message),
+        OccurredAtUtc = message.OccurredAtUtc
+    });
+}
+
+static void EnqueueWishlistCreatedOutboxEvent(WishlistDbContext db, WishlistCreatedEvent message)
+{
     db.OutboxMessages.Add(new OutboxMessage
     {
         Id = message.EventId,
