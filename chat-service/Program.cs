@@ -57,6 +57,7 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.Configure<UserServiceOptions>(builder.Configuration.GetSection(UserServiceOptions.SectionName));
 builder.Services.Configure<WishlistServiceOptions>(builder.Configuration.GetSection(WishlistServiceOptions.SectionName));
 builder.Services.Configure<RabbitMqOptions>(builder.Configuration.GetSection(RabbitMqOptions.SectionName));
+builder.Services.Configure<OutboxOptions>(builder.Configuration.GetSection(OutboxOptions.SectionName));
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>() ?? new JwtOptions();
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.Key));
@@ -116,6 +117,7 @@ builder.Services.AddHttpClient<WishlistServiceClient>((serviceProvider, client) 
 
 builder.Services.AddSingleton<ChatConnectionManager>();
 builder.Services.AddHostedService<WishlistCreatedConsumerHostedService>();
+builder.Services.AddHostedService<ChatOutboxPublisherHostedService>();
 
 var app = builder.Build();
 var webSocketJsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -200,6 +202,7 @@ app.MapPost("/chat/messages", async (
         Text = text
     };
     db.ChatMessages.Add(message);
+    EnqueueChatMessageCreatedOutboxEvent(db, message, accessCheck.OwnerUserId!.Value);
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.ChatMessagesSent.Inc();
 
@@ -360,6 +363,7 @@ app.Map("/chat/ws", async (
                 Text = payloadText
             };
             db.ChatMessages.Add(message);
+            EnqueueChatMessageCreatedOutboxEvent(db, message, accessCheck.OwnerUserId!.Value);
             await db.SaveChangesAsync(context.RequestAborted);
             ServiceMetrics.ChatMessagesSent.Inc();
 
@@ -434,6 +438,28 @@ static Task BroadcastOwnerChatNotificationAsync(
     }, jsonOptions);
 
     return connectionManager.BroadcastAsync(GetUserNotificationRoomKey(ownerUserId), payload, cancellationToken);
+}
+
+static void EnqueueChatMessageCreatedOutboxEvent(ChatDbContext db, ChatMessage message, Guid ownerUserId)
+{
+    var chatEvent = new ChatMessageCreatedEvent(
+        Guid.NewGuid(),
+        "chat.message.created",
+        message.Id,
+        message.WishlistId,
+        message.ItemId,
+        message.SenderUserId,
+        ownerUserId,
+        message.Text,
+        message.CreatedAtUtc);
+
+    db.OutboxMessages.Add(new ChatOutboxMessage
+    {
+        Id = chatEvent.EventId,
+        Type = chatEvent.EventType,
+        Payload = JsonSerializer.Serialize(chatEvent),
+        OccurredAtUtc = chatEvent.OccurredAtUtc
+    });
 }
 
 static ChatMessageResponse ToResponse(

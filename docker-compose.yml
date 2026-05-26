@@ -123,6 +123,8 @@ services:
       RabbitMq__VirtualHost: /
       RabbitMq__Exchange: wishlist.events
       RabbitMq__Queue: chat.wishlist-created
+      Outbox__BatchSize: 20
+      Outbox__PollIntervalMilliseconds: 2000
     depends_on:
       chat-db:
         condition: service_healthy

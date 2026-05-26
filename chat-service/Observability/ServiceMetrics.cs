@@ -39,4 +39,8 @@ public static class ServiceMetrics
     public static readonly Counter WishlistCreatedEventsConsumed = Metrics.CreateCounter(
         "chat_wishlist_created_events_consumed_total",
         "Total number of wishlist.created events consumed by chat-service.");
+
+    public static readonly Counter ChatOutboxEventsPublished = Metrics.CreateCounter(
+        "chat_outbox_events_published_total",
+        "Total number of chat outbox events published to RabbitMQ.");
 }
