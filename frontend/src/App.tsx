@@ -215,6 +215,7 @@ function App() {
   const chatSocketRef = useRef<WebSocket | null>(null);
   const chatNotificationsSocketRef = useRef<WebSocket | null>(null);
   const myWishlistsRef = useRef<WishlistSummary[]>([]);
+  const accountSessionVersionRef = useRef(0);
   const seenTimelineNotificationIdsRef = useRef<Set<string>>(new Set());
   const hasInitializedToastStackRef = useRef(false);
 
@@ -328,6 +329,43 @@ function App() {
     }, 7000);
   }
 
+  function resetPrivateAccountState() {
+    accountSessionVersionRef.current += 1;
+    myWishlistsRef.current = [];
+    seenTimelineNotificationIdsRef.current = new Set();
+    hasInitializedToastStackRef.current = false;
+    setCreatedWishlist(null);
+    setMyWishlists([]);
+    setLibraryTab("created");
+    setWishlistTitle("");
+    setWishlistDescription("");
+    setWishlistMessage("");
+    setWishlistError("");
+    setIsEditingWishlist(false);
+    setEditWishlistTitle("");
+    setEditWishlistDescription("");
+    setItemTitle("");
+    setItemUrl("");
+    setItemImageUrl("");
+    setItemPrice("");
+    setItemComment("");
+    setEditingItemId("");
+    setEditItemTitle("");
+    setEditItemUrl("");
+    setEditItemImageUrl("");
+    setEditItemPrice("");
+    setEditItemComment("");
+    setReservations([]);
+    setInboxEvents([]);
+    setMessageNotifications([]);
+    setConversation(null);
+    setChatMessages([]);
+    setChatText("");
+    setChatMessage("");
+    setChatError("");
+    setToastNotifications([]);
+  }
+
   useEffect(() => {
     const seenIds = seenTimelineNotificationIdsRef.current;
     if (!hasInitializedToastStackRef.current) {
@@ -353,9 +391,11 @@ function App() {
         clearToken();
         setTokenState("");
         setMe(null);
+        resetPrivateAccountState();
       });
     } else {
       setMe(null);
+      resetPrivateAccountState();
     }
   }, [token]);
 
@@ -439,6 +479,14 @@ function App() {
     }));
     chatSocketRef.current = socket;
 
+    socket.onopen = () => {
+      setChatError((current) =>
+        current === "Не удалось подключиться к чату в реальном времени. Сообщения будут обновляться после отправки."
+          ? ""
+          : current
+      );
+    };
+
     socket.onmessage = (event) => {
       try {
         const incoming = JSON.parse(event.data) as ChatMessage;
@@ -487,6 +535,7 @@ function App() {
         auth: false,
         body: { email: registerEmail, password: registerPassword }
       });
+      resetPrivateAccountState();
       setToken(response.accessToken);
       setTokenState(response.accessToken);
       setMe(response.user);
@@ -508,6 +557,7 @@ function App() {
         auth: false,
         body: { email: loginEmail, password: loginPassword }
       });
+      resetPrivateAccountState();
       setToken(response.accessToken);
       setTokenState(response.accessToken);
       setMe(response.user);
@@ -521,6 +571,7 @@ function App() {
     clearToken();
     setTokenState("");
     setMe(null);
+    resetPrivateAccountState();
     setAuthMessage("");
     setAuthError("");
   }
@@ -598,11 +649,14 @@ function App() {
   }
 
   async function loadMyWishlists() {
+    const sessionVersion = accountSessionVersionRef.current;
     const response = await apiRequest<WishlistSummary[]>("/wishlists");
+    if (sessionVersion !== accountSessionVersionRef.current) return;
     setMyWishlists(response);
-    if (!createdWishlist && response[0]) {
-      setCreatedWishlist(response[0]);
-    }
+    setCreatedWishlist((current) => {
+      if (!current) return response[0] ?? null;
+      return response.find((wishlist) => wishlist.id === current.id) ?? response[0] ?? null;
+    });
     await loadMessageNotifications(response);
   }
 
@@ -750,21 +804,32 @@ function App() {
       setReservations([]);
       return [];
     }
+    const sessionVersion = accountSessionVersionRef.current;
     const response = await apiRequest<MyReservation[]>("/wishlists/reservations/me");
+    if (sessionVersion !== accountSessionVersionRef.current) return [];
     setReservations(response);
     return response;
   }
 
   async function loadInbox() {
-    const response = await apiRequest<NotificationInboxEvent[]>("/notifications/inbox", { auth: false });
+    if (!token) {
+      setInboxEvents([]);
+      return;
+    }
+    const sessionVersion = accountSessionVersionRef.current;
+    const response = await apiRequest<NotificationInboxEvent[]>("/notifications/inbox");
+    if (sessionVersion !== accountSessionVersionRef.current) return;
     setInboxEvents(sortByNewest(response, (event) => event.occurredAtUtc || event.receivedAtUtc));
   }
 
   async function loadMessageNotifications(wishlists: WishlistSummary[]) {
     if (!token) return;
+    const sessionVersion = accountSessionVersionRef.current;
     const next: MessageNotification[] = [];
     for (const wishlist of wishlists) {
+      if (sessionVersion !== accountSessionVersionRef.current) return;
       for (const item of wishlist.items) {
+        if (sessionVersion !== accountSessionVersionRef.current) return;
         try {
           const query = new URLSearchParams({
             wishlistId: wishlist.id,
@@ -790,6 +855,7 @@ function App() {
         }
       }
     }
+    if (sessionVersion !== accountSessionVersionRef.current) return;
     setMessageNotifications(sortByNewest(next, (message) => message.createdAtUtc));
   }
 
@@ -915,12 +981,15 @@ function App() {
       setChatMessages([]);
       return;
     }
+    const sessionVersion = accountSessionVersionRef.current;
     setChatError("");
     try {
       const query = new URLSearchParams({ wishlistId, itemId, shareToken });
       const response = await apiRequest<ChatMessage[]>(`/chat/messages?${query.toString()}`);
+      if (sessionVersion !== accountSessionVersionRef.current) return;
       setChatMessages(sortChatMessages(response));
     } catch (error) {
+      if (sessionVersion !== accountSessionVersionRef.current) return;
       setChatError(explainError(error, "Не получилось загрузить сообщения."));
     }
   }
