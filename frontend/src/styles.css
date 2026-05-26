@@ -620,6 +620,31 @@ input::placeholder {
   gap: 10px;
 }
 
+.notification-panel {
+  min-height: 0;
+}
+
+.notification-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 8px;
+  scrollbar-gutter: stable;
+}
+
+.notification-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.notification-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d4c6b4;
+}
+
+.notification-list {
+  min-height: min-content;
+}
+
 .compact-list article {
   display: flex;
   align-items: center;

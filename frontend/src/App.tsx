@@ -168,10 +168,14 @@ function mergeChatMessage(messages: ChatMessage[], next: ChatMessage): ChatMessa
   return sortChatMessages([...messages, next]);
 }
 
-function scrollToElement(id: string) {
+function scrollToElement(id: string, block: ScrollLogicalPosition = "center", delay = 120) {
   window.setTimeout(() => {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, 120);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block });
+  }, delay);
+}
+
+function normalizeDisplayText(value?: string | null): string {
+  return (value ?? "").replace(/\\u00a0/gi, " ").replace(/\u00a0/g, " ");
 }
 
 function notificationTitle(eventType: string): string {
@@ -837,17 +841,17 @@ function App() {
             shareToken: wishlist.shareToken
           });
           const messages = await apiRequest<ChatMessage[]>(`/chat/messages?${query.toString()}`);
-          const latestIncoming = [...messages].reverse().find((message) => !message.isMine);
-          if (latestIncoming) {
+          const incomingMessages = messages.filter((message) => !message.isMine);
+          for (const incoming of incomingMessages) {
             next.push({
               wishlistId: wishlist.id,
               shareToken: wishlist.shareToken,
               itemId: item.id,
               wishlistTitle: wishlist.title,
               itemTitle: item.title,
-              senderName: latestIncoming.senderDisplayName || latestIncoming.author || "Гость",
-              text: latestIncoming.text,
-              createdAtUtc: latestIncoming.createdAtUtc
+              senderName: incoming.senderDisplayName || incoming.author || "Гость",
+              text: incoming.text,
+              createdAtUtc: incoming.createdAtUtc
             });
           }
         } catch {
@@ -868,6 +872,7 @@ function App() {
       title: item.title
     });
     loadChatMessages(publicWishlist.id, item.id, publicShareToken).catch(() => void 0);
+    scrollToElement(`conversation-${item.id}`, "start", 180);
   }
 
   function startOwnerConversation(item: WishlistItem) {
@@ -879,6 +884,7 @@ function App() {
       title: item.title
     });
     loadChatMessages(createdWishlist.id, item.id, createdWishlist.shareToken).catch(() => void 0);
+    scrollToElement(`conversation-${item.id}`, "start", 180);
   }
 
   function beginEditItem(item: WishlistItem) {
@@ -960,8 +966,7 @@ function App() {
         title: item.message.itemTitle
       });
       loadChatMessages(item.message.wishlistId, item.message.itemId, item.message.shareToken).catch(() => void 0);
-      scrollToElement(`owner-item-${item.message.itemId}`);
-      scrollToElement(`conversation-${item.message.itemId}`);
+      scrollToElement(`conversation-${item.message.itemId}`, "start", 220);
       return;
     }
 
@@ -1103,8 +1108,8 @@ function App() {
       <div className="messages">
         {chatMessages.map((message) => (
           <article className={message.isMine ? "message mine" : "message"} key={message.id}>
-            <span>{message.isMine ? "Вы" : message.senderDisplayName || message.author}</span>
-            <p>{message.text}</p>
+            <span>{message.isMine ? "Вы" : normalizeDisplayText(message.senderDisplayName || message.author)}</span>
+            <p>{normalizeDisplayText(message.text)}</p>
             <time>{formatDate(message.createdAtUtc)}</time>
           </article>
         ))}
@@ -1131,8 +1136,8 @@ function App() {
           }}
           tabIndex={toast.action ? 0 : undefined}
         >
-          <strong>{toast.title}</strong>
-          <span>{toast.description}</span>
+          <strong>{normalizeDisplayText(toast.title)}</strong>
+          <span>{normalizeDisplayText(toast.description)}</span>
         </article>
       ))}
     </div>
@@ -1494,45 +1499,47 @@ function App() {
                 </div>
               </section>
 
-              <section id="questions" className="panel">
+              <section id="questions" className="panel notification-panel">
                 <p className="eyebrow">Уведомления</p>
                 <h2>События</h2>
-                <div className="compact-list">
-                  {timelineNotifications.map((item) => (
-                    item.kind === "message" ? (
-                      <article
-                        key={item.id}
-                        className="clickable-list-item"
-                        onClick={() => openTimelineNotification(item)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
-                        }}
-                        tabIndex={0}
-                      >
-                        <div>
-                          <strong>Новый вопрос по подарку</strong>
-                          <span>{item.message.senderName}: {item.message.text}</span>
-                          <span>{item.message.wishlistTitle} · {item.message.itemTitle} · {formatDate(item.message.createdAtUtc)}</span>
-                        </div>
-                      </article>
-                    ) : (
-                      <article
-                        key={item.id}
-                        className="clickable-list-item"
-                        onClick={() => openTimelineNotification(item)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
-                        }}
-                        tabIndex={0}
-                      >
-                        <div>
-                          <strong>{notificationTitle(item.event.eventType)}</strong>
-                          <span>{notificationDescription(item.event)}</span>
-                          <span>{formatDate(item.event.occurredAtUtc || item.event.receivedAtUtc)}</span>
-                        </div>
-                      </article>
-                    )
-                  ))}
+                <div className="notification-scroll">
+                  <div className="compact-list notification-list">
+                    {timelineNotifications.map((item) => (
+                      item.kind === "message" ? (
+                        <article
+                          key={item.id}
+                          className="clickable-list-item"
+                          onClick={() => openTimelineNotification(item)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
+                          }}
+                          tabIndex={0}
+                        >
+                          <div>
+                            <strong>Новый вопрос по подарку</strong>
+                            <span>{normalizeDisplayText(item.message.senderName)}: {normalizeDisplayText(item.message.text)}</span>
+                            <span>{normalizeDisplayText(item.message.wishlistTitle)} · {normalizeDisplayText(item.message.itemTitle)} · {formatDate(item.message.createdAtUtc)}</span>
+                          </div>
+                        </article>
+                      ) : (
+                        <article
+                          key={item.id}
+                          className="clickable-list-item"
+                          onClick={() => openTimelineNotification(item)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") openTimelineNotification(item);
+                          }}
+                          tabIndex={0}
+                        >
+                          <div>
+                            <strong>{notificationTitle(item.event.eventType)}</strong>
+                            <span>{normalizeDisplayText(notificationDescription(item.event))}</span>
+                            <span>{formatDate(item.event.occurredAtUtc || item.event.receivedAtUtc)}</span>
+                          </div>
+                        </article>
+                      )
+                    ))}
+                  </div>
                   {timelineNotifications.length === 0 && <p className="empty">Новых событий пока нет.</p>}
                 </div>
               </section>
