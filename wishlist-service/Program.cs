@@ -161,7 +161,7 @@ app.MapPost("/wishlists", async (
     await db.SaveChangesAsync(cancellationToken);
     ServiceMetrics.WishlistsCreated.Inc();
 
-    return Results.Created($"/wishlists/{wishlist.Id}", ToWishlistResponse(wishlist));
+    return Results.Created($"/wishlists/{wishlist.Id}", ToWishlistResponse(wishlist, GetDisplayName(principal)));
 })
 .RequireAuthorization()
 .WithTags("Wishlists");
@@ -180,7 +180,7 @@ app.MapGet("/wishlists", async (
         .OrderByDescending(x => x.CreatedAtUtc)
         .ToListAsync(cancellationToken);
 
-    return Results.Ok(wishlists.Select(ToWishlistResponse).ToList());
+    return Results.Ok(wishlists.Select(wishlist => ToWishlistResponse(wishlist, GetDisplayName(principal))).ToList());
 })
 .RequireAuthorization()
 .WithTags("Wishlists");
@@ -212,7 +212,7 @@ app.MapPut("/wishlists/{wishlistId:guid}", async (
     wishlist.Description = string.IsNullOrWhiteSpace(description) ? null : description;
     await db.SaveChangesAsync(cancellationToken);
 
-    return Results.Ok(ToWishlistResponse(wishlist));
+    return Results.Ok(ToWishlistResponse(wishlist, GetDisplayName(principal)));
 })
 .RequireAuthorization()
 .WithTags("Wishlists");
@@ -269,7 +269,7 @@ app.MapPost("/wishlists/{wishlistId:guid}/items", async (
     var itemCount = await db.WishlistItems.CountAsync(x => x.WishlistId == wishlist.Id, cancellationToken);
     if (itemCount >= maxItems)
     {
-        return Results.BadRequest(new { error = $"Wishlist item limit reached ({maxItems})." });
+        return Results.BadRequest(new { error = $"Wishlist can contain maximum {maxItems} gifts" });
     }
 
     var item = new WishlistItem
@@ -356,6 +356,7 @@ app.MapDelete("/wishlists/{wishlistId:guid}/items/{itemId:guid}", async (
 app.MapGet("/wishlists/reservations/me", async (
     ClaimsPrincipal principal,
     WishlistDbContext db,
+    UserServiceClient userServiceClient,
     CancellationToken cancellationToken) =>
 {
     var userId = GetUserId(principal);
@@ -365,17 +366,35 @@ app.MapGet("/wishlists/reservations/me", async (
         .Include(x => x.Wishlist)
         .Where(x => x.ReservedByUserId == userId.Value && x.ReservedAtUtc != null)
         .OrderByDescending(x => x.ReservedAtUtc)
-        .Select(x => new MyReservedItemResponse(
+        .Select(x => new
+        {
             x.WishlistId,
             x.Wishlist.ShareToken,
             x.Wishlist.Title,
-            x.Id,
-            x.Title,
-            x.ReservedAtUtc!.Value
-        ))
+            x.Wishlist.OwnerUserId,
+            ItemId = x.Id,
+            ItemTitle = x.Title,
+            ReservedAtUtc = x.ReservedAtUtc!.Value
+        })
         .ToListAsync(cancellationToken);
 
-    return Results.Ok(reservedItems);
+    var ownerNames = new Dictionary<Guid, string?>();
+    foreach (var ownerUserId in reservedItems.Select(x => x.OwnerUserId).Distinct())
+    {
+        var owner = await userServiceClient.GetUserAsync(ownerUserId, cancellationToken);
+        ownerNames[ownerUserId] = owner?.DisplayName;
+    }
+
+    return Results.Ok(reservedItems.Select(x => new MyReservedItemResponse(
+        x.WishlistId,
+        x.ShareToken,
+        x.Title,
+        x.OwnerUserId,
+        ownerNames.GetValueOrDefault(x.OwnerUserId),
+        x.ItemId,
+        x.ItemTitle,
+        x.ReservedAtUtc
+    )));
 })
 .RequireAuthorization()
 .WithTags("Wishlists");
@@ -531,7 +550,7 @@ app.MapGet("/wishlists/{wishlistId:guid}", async (
     if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
     if (wishlist.OwnerUserId != ownerUserId.Value) return Results.StatusCode(StatusCodes.Status403Forbidden);
 
-    return Results.Ok(ToWishlistResponse(wishlist));
+    return Results.Ok(ToWishlistResponse(wishlist, GetDisplayName(principal)));
 })
 .RequireAuthorization()
 .WithTags("Wishlists");
@@ -539,6 +558,7 @@ app.MapGet("/wishlists/{wishlistId:guid}", async (
 app.MapGet("/wishlists/public/{shareToken:guid}", async (
     Guid shareToken,
     WishlistDbContext db,
+    UserServiceClient userServiceClient,
     CancellationToken cancellationToken) =>
 {
     var wishlist = await db.Wishlists
@@ -546,7 +566,8 @@ app.MapGet("/wishlists/public/{shareToken:guid}", async (
         .FirstOrDefaultAsync(x => x.ShareToken == shareToken, cancellationToken);
     if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
 
-    return Results.Ok(ToPublicWishlistResponse(wishlist));
+    var owner = await userServiceClient.GetUserAsync(wishlist.OwnerUserId, cancellationToken);
+    return Results.Ok(ToPublicWishlistResponse(wishlist, owner?.DisplayName));
 })
 .WithTags("Wishlists");
 
@@ -558,6 +579,10 @@ static Guid? GetUserId(ClaimsPrincipal principal)
               ?? principal.FindFirstValue("sub");
     return Guid.TryParse(raw, out var userId) ? userId : null;
 }
+
+static string? GetDisplayName(ClaimsPrincipal principal) =>
+    principal.FindFirstValue("display_name")
+    ?? principal.FindFirstValue(ClaimTypes.Name);
 
 static bool IsValidWishlistPayload(string title, string? description)
 {
@@ -622,10 +647,11 @@ static bool IsValidAbsoluteHttpUrl(string? url, string fieldName, out string err
     return true;
 }
 
-static WishlistResponse ToWishlistResponse(Wishlist wishlist) =>
+static WishlistResponse ToWishlistResponse(Wishlist wishlist, string? ownerDisplayName = null) =>
     new(
         wishlist.Id,
         wishlist.OwnerUserId,
+        ownerDisplayName,
         wishlist.Title,
         wishlist.Description,
         wishlist.ShareToken,
@@ -636,10 +662,11 @@ static WishlistResponse ToWishlistResponse(Wishlist wishlist) =>
             .ToList()
     );
 
-static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
+static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist, string? ownerDisplayName = null) =>
     new(
         wishlist.Id,
         wishlist.OwnerUserId,
+        ownerDisplayName,
         wishlist.Title,
         wishlist.Description,
         wishlist.Items
@@ -649,7 +676,7 @@ static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist) =>
     );
 
 static WishlistItemResponse ToItemResponse(WishlistItem item) =>
-    new(item.Id, item.Title, item.Url, item.ImageUrl, item.Price, item.Comment, item.ReservedByUserId is not null, item.ReservedAtUtc, item.CreatedAtUtc);
+    new(item.Id, item.Title, item.Url, item.ImageUrl, item.Price, item.Comment, item.ReservedByUserId is not null, item.ReservedByUserId, item.ReservedAtUtc, item.CreatedAtUtc);
 
 static async Task MigrateDatabaseAsync(IServiceProvider services)
 {
