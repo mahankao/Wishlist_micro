@@ -284,6 +284,64 @@ app.Map("/chat/notifications/ws", async (
 .RequireAuthorization()
 .WithTags("Chat");
 
+app.Map("/chat/wishlist/ws", async (
+    HttpContext context,
+    WishlistServiceClient wishlistServiceClient,
+    ChatConnectionManager connectionManager) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsync("WebSocket request expected.");
+        return;
+    }
+
+    if (!Guid.TryParse(context.Request.Query["shareToken"], out var shareToken))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsync("shareToken query param is required.");
+        return;
+    }
+
+    var wishlistLookup = await wishlistServiceClient.ValidateWishlistAsync(shareToken, context.RequestAborted);
+    if (wishlistLookup.Result == RoomValidationResult.NotFound)
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    if (wishlistLookup.Result == RoomValidationResult.Unavailable || wishlistLookup.WishlistId is null)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        return;
+    }
+
+    var socket = await context.WebSockets.AcceptWebSocketAsync();
+    var roomKey = WishlistCreatedConsumerHostedService.GetWishlistRoomKey(wishlistLookup.WishlistId.Value);
+    var connectionId = connectionManager.AddConnection(roomKey, socket);
+    var buffer = new byte[256];
+
+    try
+    {
+        while (socket.State == WebSocketState.Open && !context.RequestAborted.IsCancellationRequested)
+        {
+            var result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), context.RequestAborted);
+            if (result.MessageType == WebSocketMessageType.Close) break;
+        }
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested) { }
+    catch (WebSocketException) { }
+    finally
+    {
+        connectionManager.RemoveConnection(roomKey, connectionId);
+        if (socket.State != WebSocketState.Closed && socket.State != WebSocketState.Aborted)
+        {
+            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "closing", CancellationToken.None);
+        }
+        socket.Dispose();
+    }
+})
+.WithTags("Chat");
+
 app.Map("/chat/ws", async (
     HttpContext context,
     ClaimsPrincipal principal,
@@ -528,6 +586,12 @@ static async Task<(IResult? Error, Guid? WishlistId, Guid? OwnerUserId)> EnsureA
     var roomLookup = await wishlistServiceClient.ValidateRoomAsync(shareToken, itemId, cancellationToken);
     if (roomLookup.Result == RoomValidationResult.NotFound) return (Results.NotFound(new { error = "Chat room not found." }), null, null);
     if (roomLookup.Result == RoomValidationResult.Unavailable) return (Results.StatusCode(StatusCodes.Status503ServiceUnavailable), null, null);
+    if (roomLookup.OwnerUserId != userId &&
+        roomLookup.ReservedByUserId is not null &&
+        roomLookup.ReservedByUserId != userId)
+    {
+        return (Results.StatusCode(StatusCodes.Status403Forbidden), null, null);
+    }
 
     return (null, roomLookup.WishlistId, roomLookup.OwnerUserId);
 }

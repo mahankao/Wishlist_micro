@@ -16,6 +16,7 @@ public record WishlistItemResponse(
     decimal? Price,
     string? Comment,
     bool IsReserved,
+    Guid? ReservedByUserId,
     DateTime? ReservedAtUtc,
     DateTime CreatedAtUtc
 );
@@ -23,6 +24,7 @@ public record WishlistItemResponse(
 public record WishlistResponse(
     Guid Id,
     Guid OwnerUserId,
+    string? OwnerDisplayName,
     string Title,
     string? Description,
     Guid ShareToken,
@@ -33,6 +35,7 @@ public record WishlistResponse(
 public record PublicWishlistResponse(
     Guid Id,
     Guid OwnerUserId,
+    string? OwnerDisplayName,
     string Title,
     string? Description,
     IReadOnlyList<WishlistItemResponse> Items
@@ -42,6 +45,8 @@ public record MyReservedItemResponse(
     Guid WishlistId,
     Guid ShareToken,
     string WishlistTitle,
+    Guid OwnerUserId,
+    string? OwnerDisplayName,
     Guid ItemId,
     string ItemTitle,
     DateTime ReservedAtUtc

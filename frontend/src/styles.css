@@ -558,6 +558,17 @@ input::placeholder {
   font-size: 19px;
 }
 
+.gift-recipient {
+  width: max-content;
+  max-width: 100%;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #eef7f1;
+  color: #236348;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
 .center-panel {
   max-width: 680px;
   margin: 64px auto;
