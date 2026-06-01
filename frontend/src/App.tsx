@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { apiRequest, buildWsUrl, clearToken, getToken, setToken } from "./api";
+import { ApiError, apiRequest, buildWsUrl, clearToken, getToken, setToken } from "./api";
 
 type UserDto = {
   id: string;
@@ -35,6 +35,7 @@ type WishlistResponse = {
   description?: string | null;
   shareToken: string;
   createdAtUtc: string;
+  expiresAtUtc: string;
   items: WishlistItem[];
 };
 
@@ -46,6 +47,7 @@ type PublicWishlistResponse = {
   ownerDisplayName?: string | null;
   title: string;
   description?: string | null;
+  expiresAtUtc: string;
   items: WishlistItem[];
 };
 
@@ -120,6 +122,8 @@ type ToastNotification = {
   action?: TimelineNotification;
 };
 
+type PublicGiftFilter = "all" | "available" | "reservedByMe";
+
 const defaultPhoto =
   "https://images.unsplash.com/photo-1513201099705-a9746e1e201f?auto=format&fit=crop&w=900&q=80";
 const MAX_GIFTS_PER_WISHLIST = 100;
@@ -135,6 +139,9 @@ function explainError(error: unknown, fallback = "Не получилось вы
   if (rawMessage.includes("Invalid login payload")) return "Введите email и пароль.";
   if (rawMessage.includes("Invalid credentials")) return "Неверный email или пароль.";
   if (rawMessage.includes("Wishlist not found")) return "Wishlist не найден. Проверьте ссылку.";
+  if (rawMessage.includes("410") || rawMessage.includes("Gone")) return "Срок действия wishlist закончился.";
+  if (rawMessage.includes("expiration date is required")) return "Выберите дату, до которой будет доступен wishlist.";
+  if (rawMessage.includes("expiration date must be in the future")) return "Дата wishlist должна быть в будущем.";
   if (rawMessage.includes("Wishlist can contain maximum 100 gifts")) return "В один wishlist можно добавить максимум 100 подарков.";
   if (rawMessage.includes("Title is required")) return "Введите название подарка. Оно обязательно.";
   if (rawMessage.includes("Url must") || rawMessage.includes("ImageUrl must")) return "Ссылка должна начинаться с http:// или https://.";
@@ -158,6 +165,31 @@ function formatDate(value?: string | null): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function formatDateOnly(value?: string | null): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric"
+  }).format(new Date(value));
+}
+
+function getDateInputValue(value?: string | null): string {
+  if (!value) return "";
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+function getDefaultExpiryDateInput(): string {
+  const date = new Date();
+  date.setDate(date.getDate() + 30);
+  return date.toISOString().slice(0, 10);
+}
+
+function dateInputToEndOfDayUtc(value: string): string | null {
+  if (!value) return null;
+  return new Date(`${value}T23:59:59`).toISOString();
 }
 
 function getTime(value?: string | null): number {
@@ -254,14 +286,17 @@ function App() {
 
   const [wishlistTitle, setWishlistTitle] = useState("");
   const [wishlistDescription, setWishlistDescription] = useState("");
+  const [wishlistExpiresAt, setWishlistExpiresAt] = useState(getDefaultExpiryDateInput);
   const [createdWishlist, setCreatedWishlist] = useState<WishlistResponse | null>(null);
   const [myWishlists, setMyWishlists] = useState<WishlistSummary[]>([]);
   const [libraryTab, setLibraryTab] = useState<"created" | "giving">("created");
   const [wishlistMessage, setWishlistMessage] = useState("");
   const [wishlistError, setWishlistError] = useState("");
   const [isEditingWishlist, setIsEditingWishlist] = useState(false);
+  const [isWishlistActionsOpen, setIsWishlistActionsOpen] = useState(false);
   const [editWishlistTitle, setEditWishlistTitle] = useState("");
   const [editWishlistDescription, setEditWishlistDescription] = useState("");
+  const [editWishlistExpiresAt, setEditWishlistExpiresAt] = useState("");
 
   const [itemTitle, setItemTitle] = useState("");
   const [itemUrl, setItemUrl] = useState("");
@@ -278,6 +313,8 @@ function App() {
   const [openLinkValue, setOpenLinkValue] = useState("");
   const [publicShareToken, setPublicShareToken] = useState(routeShareToken);
   const [publicWishlist, setPublicWishlist] = useState<PublicWishlistResponse | null>(null);
+  const [isPublicWishlistExpired, setIsPublicWishlistExpired] = useState(false);
+  const [publicGiftFilter, setPublicGiftFilter] = useState<PublicGiftFilter>("all");
   const [selectedPublicItemId, setSelectedPublicItemId] = useState("");
   const [publicMessage, setPublicMessage] = useState("");
   const [publicError, setPublicError] = useState("");
@@ -330,6 +367,12 @@ function App() {
 
   const isOwnPublicWishlist = Boolean(me && publicWishlist?.ownerUserId === me.id);
 
+  const conversationOwnerUserId = conversation && publicWishlist && conversation.wishlistId === publicWishlist.id
+    ? publicWishlist.ownerUserId
+    : conversation && createdWishlist && conversation.wishlistId === createdWishlist.id
+      ? createdWishlist.ownerUserId
+      : null;
+
   const reservedByMe = useMemo(() => {
     if (!publicWishlist) return new Set<string>();
     return new Set(
@@ -338,6 +381,17 @@ function App() {
         .map((reservation) => reservation.itemId)
     );
   }, [publicWishlist, reservations]);
+
+  const publicGiftItems = useMemo(() => {
+    if (!publicWishlist) return [];
+    return [...publicWishlist.items]
+      .sort((a, b) => Number(a.isReserved) - Number(b.isReserved) || getTime(a.createdAtUtc) - getTime(b.createdAtUtc))
+      .filter((item) => {
+        if (publicGiftFilter === "available") return !item.isReserved;
+        if (publicGiftFilter === "reservedByMe") return reservedByMe.has(item.id);
+        return true;
+      });
+  }, [publicWishlist, publicGiftFilter, reservedByMe]);
 
   useEffect(() => {
     myWishlistsRef.current = myWishlists;
@@ -351,6 +405,13 @@ function App() {
     }, 7000);
   }
 
+  function showTemporaryChatMessage(message: string) {
+    setChatMessage(message);
+    window.setTimeout(() => {
+      setChatMessage((current) => current === message ? "" : current);
+    }, 2400);
+  }
+
   function resetPrivateAccountState() {
     accountSessionVersionRef.current += 1;
     myWishlistsRef.current = [];
@@ -361,11 +422,14 @@ function App() {
     setLibraryTab("created");
     setWishlistTitle("");
     setWishlistDescription("");
+    setWishlistExpiresAt(getDefaultExpiryDateInput());
     setWishlistMessage("");
     setWishlistError("");
     setIsEditingWishlist(false);
+    setIsWishlistActionsOpen(false);
     setEditWishlistTitle("");
     setEditWishlistDescription("");
+    setEditWishlistExpiresAt("");
     setItemTitle("");
     setItemUrl("");
     setItemImageUrl("");
@@ -672,11 +736,13 @@ function App() {
   async function showDashboard() {
     window.history.pushState(null, "", "/");
     setPublicWishlist(null);
+    setIsPublicWishlistExpired(false);
     setPublicShareToken("");
     setOpenLinkValue("");
     setPublicMessage("");
     setPublicError("");
     setSelectedPublicItemId("");
+    setPublicGiftFilter("all");
     setConversation(null);
     loadMyWishlists().catch(() => void 0);
     const nextReservations = await loadReservations();
@@ -692,10 +758,12 @@ function App() {
         method: "POST",
         body: {
           title: wishlistTitle || "Мой wishlist",
-          description: wishlistDescription || null
+          description: wishlistDescription || null,
+          expiresAtUtc: dateInputToEndOfDayUtc(wishlistExpiresAt)
         }
       });
       setCreatedWishlist(response);
+      setWishlistExpiresAt(getDefaultExpiryDateInput());
       setMyWishlists((prev) => [response, ...prev.filter((wishlist) => wishlist.id !== response.id)]);
       setWishlistMessage("Wishlist готов. Добавьте подарки и отправьте ссылку друзьям.");
     } catch (error) {
@@ -761,9 +829,11 @@ function App() {
     setCreatedWishlist(null);
     setWishlistTitle("");
     setWishlistDescription("");
+    setWishlistExpiresAt(getDefaultExpiryDateInput());
     setWishlistMessage("");
     setWishlistError("");
     setIsEditingWishlist(false);
+    setIsWishlistActionsOpen(false);
     setConversation(null);
   }
 
@@ -771,7 +841,9 @@ function App() {
     if (!createdWishlist) return;
     setEditWishlistTitle(createdWishlist.title);
     setEditWishlistDescription(createdWishlist.description || "");
+    setEditWishlistExpiresAt(getDateInputValue(createdWishlist.expiresAtUtc));
     setIsEditingWishlist(true);
+    setIsWishlistActionsOpen(false);
     setWishlistMessage("");
     setWishlistError("");
   }
@@ -787,7 +859,8 @@ function App() {
         method: "PUT",
         body: {
           title: editWishlistTitle,
-          description: editWishlistDescription || null
+          description: editWishlistDescription || null,
+          expiresAtUtc: dateInputToEndOfDayUtc(editWishlistExpiresAt)
         }
       });
       setCreatedWishlist(response);
@@ -814,6 +887,7 @@ function App() {
       setCreatedWishlist(nextWishlists[0] ?? null);
       setConversation(null);
       setIsEditingWishlist(false);
+      setIsWishlistActionsOpen(false);
       setWishlistMessage("Wishlist удален.");
       pushToast("Wishlist удален", "Список больше не доступен гостям.");
     } catch (error) {
@@ -840,22 +914,38 @@ function App() {
     if (!shareToken) return;
     setPublicError("");
     setPublicMessage("");
+    setIsPublicWishlistExpired(false);
     setPublicShareToken(shareToken);
     try {
       const response = await apiRequest<PublicWishlistResponse>(`/wishlists/public/${shareToken}`, { auth: false });
       applyPublicWishlist(response);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 410) {
+        setPublicWishlist(null);
+        setIsPublicWishlistExpired(true);
+        setPublicError("Wishlist больше недоступен: срок действия публичной ссылки закончился.");
+        return;
+      }
       setPublicError(explainError(error));
     }
   }
 
   async function refreshPublicWishlist(shareToken = publicShareToken) {
     if (!shareToken) return;
-    const response = await apiRequest<PublicWishlistResponse>(`/wishlists/public/${shareToken}`, { auth: false });
-    applyPublicWishlist(response);
+    try {
+      const response = await apiRequest<PublicWishlistResponse>(`/wishlists/public/${shareToken}`, { auth: false });
+      applyPublicWishlist(response);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 410) {
+        setPublicWishlist(null);
+        setIsPublicWishlistExpired(true);
+        setPublicError("Wishlist больше недоступен: срок действия публичной ссылки закончился.");
+      }
+    }
   }
 
   function applyPublicWishlist(response: PublicWishlistResponse) {
+    setIsPublicWishlistExpired(false);
     setPublicWishlist(response);
     setSelectedPublicItemId((current) => {
       if (response.items.some((item) => item.id === current)) return current;
@@ -981,8 +1071,8 @@ function App() {
       shareToken: publicShareToken,
       title: item.title
     });
+    setSelectedPublicItemId(item.id);
     loadChatMessages(publicWishlist.id, item.id, publicShareToken).catch(() => void 0);
-    scrollToElement(`conversation-${item.id}`, "start", 180);
   }
 
   function startOwnerConversation(item: WishlistItem) {
@@ -994,7 +1084,6 @@ function App() {
       title: item.title
     });
     loadChatMessages(createdWishlist.id, item.id, createdWishlist.shareToken).catch(() => void 0);
-    scrollToElement(`conversation-${item.id}`, "start", 180);
   }
 
   function beginEditItem(item: WishlistItem) {
@@ -1130,7 +1219,7 @@ function App() {
       if (socket?.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ text }));
         setChatText("");
-        setChatMessage("Сообщение отправлено.");
+        showTemporaryChatMessage("Сообщение отправлено.");
         return;
       }
 
@@ -1145,7 +1234,7 @@ function App() {
       });
       setChatMessages((prev) => mergeChatMessage(prev, response));
       setChatText("");
-      setChatMessage("Сообщение отправлено.");
+      showTemporaryChatMessage("Сообщение отправлено.");
       await loadInbox();
       if (myWishlists.length > 0) await loadMessageNotifications(myWishlists);
     } catch (error) {
@@ -1204,7 +1293,8 @@ function App() {
   );
 
   const chatPanel = conversation && (
-    <section className="panel conversation-panel" id={`conversation-${conversation.itemId}`}>
+    <div className="chat-drawer-backdrop" onClick={() => setConversation(null)}>
+      <aside className="chat-drawer" id={`conversation-${conversation.itemId}`} onClick={(event) => event.stopPropagation()}>
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Вопросы по подарку</p>
@@ -1217,8 +1307,21 @@ function App() {
 
       <div className="messages">
         {chatMessages.map((message) => (
-          <article className={message.isMine ? "message mine" : "message"} key={message.id}>
-            <span>{message.isMine ? "Вы" : normalizeDisplayText(message.senderDisplayName || message.author)}</span>
+          <article
+            className={[
+              "message",
+              message.isMine ? "mine" : "",
+              message.senderUserId === conversationOwnerUserId ? "owner-message" : ""
+            ].filter(Boolean).join(" ")}
+            key={message.id}
+          >
+            <span>
+              {message.isMine
+                ? "Вы"
+                : message.senderUserId === conversationOwnerUserId
+                  ? `Владелец wishlist · ${normalizeDisplayText(message.senderDisplayName || message.author)}`
+                  : normalizeDisplayText(message.senderDisplayName || message.author)}
+            </span>
             <p>{normalizeDisplayText(message.text)}</p>
             <time>{formatDate(message.createdAtUtc)}</time>
           </article>
@@ -1231,7 +1334,8 @@ function App() {
         <button type="submit">Отправить</button>
       </form>
       {(chatMessage || chatError) && <p className={chatError ? "notice error" : "notice ok"}>{chatError || chatMessage}</p>}
-    </section>
+      </aside>
+    </div>
   );
 
   const notificationStack = (
@@ -1269,8 +1373,12 @@ function App() {
         <main className="page">
           {!publicWishlist && (
             <section className="panel center-panel">
-              <h1>Wishlist не найден</h1>
-              <p className="muted">{publicError || "Проверьте публичную ссылку и попробуйте снова."}</p>
+              <h1>{isPublicWishlistExpired ? "Wishlist больше недоступен" : "Wishlist не найден"}</h1>
+              <p className="muted">
+                {isPublicWishlistExpired
+                  ? "Срок действия публичной ссылки закончился. Попросите владельца создать новый wishlist или продлить текущий."
+                  : publicError || "Проверьте публичную ссылку и попробуйте снова."}
+              </p>
             </section>
           )}
 
@@ -1281,11 +1389,33 @@ function App() {
                 <h1>{publicWishlist.title}</h1>
                 <p>{publicWishlist.description || "Автор собрал здесь идеи подарков, которые точно пригодятся."}</p>
                 <p className="gift-recipient">Подарок для: {normalizeDisplayText(publicWishlist.ownerDisplayName) || "владельца wishlist"}</p>
+                <p className="muted">Доступен до {formatDateOnly(publicWishlist.expiresAtUtc)}</p>
+              </section>
+
+              <section className="public-toolbar" aria-label="Фильтр подарков">
+                <div>
+                  <strong>{publicWishlist.items.filter((item) => !item.isReserved).length} свободно</strong>
+                  <span>{publicWishlist.items.length} всего</span>
+                </div>
+                <div className="segmented-control">
+                  <button className={publicGiftFilter === "all" ? "active" : ""} type="button" onClick={() => setPublicGiftFilter("all")}>Все</button>
+                  <button className={publicGiftFilter === "available" ? "active" : ""} type="button" onClick={() => setPublicGiftFilter("available")}>Свободные</button>
+                  <button className={publicGiftFilter === "reservedByMe" ? "active" : ""} type="button" onClick={() => setPublicGiftFilter("reservedByMe")}>Забронированы мной</button>
+                </div>
               </section>
 
               <section className="gift-grid">
-                {publicWishlist.items.map((item) => (
-                  <article className="product-card" id={`public-item-${item.id}`} key={item.id}>
+                {publicGiftItems.map((item) => (
+                  <article
+                    className={[
+                      "product-card",
+                      item.isReserved && !reservedByMe.has(item.id) ? "reserved-card" : "",
+                      reservedByMe.has(item.id) ? "reserved-by-me-card" : "",
+                      selectedPublicItem?.id === item.id ? "selected-card" : ""
+                    ].filter(Boolean).join(" ")}
+                    id={`public-item-${item.id}`}
+                    key={item.id}
+                  >
                     <GiftImage item={item} />
                     <div className="product-content">
                       <div className="product-title">
@@ -1300,7 +1430,9 @@ function App() {
                         {item.url && <a href={item.url} target="_blank" rel="noreferrer">Открыть магазин</a>}
                       </div>
                       <div className="card-actions">
-                        {reservedByMe.has(item.id) ? (
+                        {!me ? (
+                          <a className="button" href="#auth">Войти, чтобы забронировать</a>
+                        ) : reservedByMe.has(item.id) ? (
                           <button className="secondary" onClick={() => unreserveItem(item.id)}>Отменить бронь</button>
                         ) : (
                           <button disabled={item.isReserved || isOwnPublicWishlist} onClick={() => reserveItem(item.id)}>
@@ -1318,6 +1450,9 @@ function App() {
                     </div>
                   </article>
                 ))}
+                {publicGiftItems.length === 0 && (
+                  <p className="empty">В этом фильтре нет подарков. Переключитесь на “Все”, чтобы посмотреть весь wishlist.</p>
+                )}
               </section>
 
               {(publicMessage || publicError) && <p className={publicError ? "notice error" : "notice ok"}>{publicError || publicMessage}</p>}
@@ -1424,12 +1559,13 @@ function App() {
                       <article key={wishlist.id}>
                         <div>
                           <strong>{wishlist.title}</strong>
-                          <span>{wishlist.items.length} подарков</span>
+                          <span>{wishlist.items.length} подарков · до {formatDateOnly(wishlist.expiresAtUtc)}</span>
                         </div>
                         <button className="secondary small" onClick={() => setCreatedWishlist(wishlist)}>Открыть</button>
                       </article>
                     ))}
-                    {myWishlists.length === 0 && <p className="empty">Вы ещё не создавали wishlist.</p>}
+                    {myWishlists.length === 0 && <p className="empty">Вы ещё не создавали wishlist. Создайте первый список ниже и добавьте подарки.</p>}
+                    <button className="secondary full-width-action" type="button" onClick={beginNewWishlist}>Создать ещё один wishlist</button>
                   </div>
                 ) : (
                   <div className="compact-list">
@@ -1443,7 +1579,7 @@ function App() {
                         <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                       </article>
                     ))}
-                    {reservations.length === 0 && <p className="empty">Вы пока не выбрали подарки для друзей.</p>}
+                    {reservations.length === 0 && <p className="empty">Вы пока не выбрали подарки для друзей. Откройте ссылку друга, чтобы выбрать подарок.</p>}
                   </div>
                 )}
               </section>
@@ -1459,15 +1595,24 @@ function App() {
                         : "Название и описание помогут друзьям понять настроение списка."}
                     </p>
                     {createdWishlist && (
-                      <p className="gift-recipient">Подарок для: {normalizeDisplayText(createdWishlist.ownerDisplayName || me?.displayName) || "меня"}</p>
+                      <div className="meta-row">
+                        <p className="gift-recipient">Подарок для: {normalizeDisplayText(createdWishlist.ownerDisplayName || me?.displayName) || "меня"}</p>
+                        <p className="gift-recipient">Доступен до {formatDateOnly(createdWishlist.expiresAtUtc)}</p>
+                      </div>
                     )}
                   </div>
                   {createdWishlist && (
                     <div className="button-column">
                       <button className="secondary" onClick={copyPublicLink}>Скопировать ссылку</button>
-                      <button className="secondary" onClick={beginEditWishlist}>Редактировать</button>
-                      <button className="secondary danger" onClick={deleteWishlist}>Удалить</button>
-                      <button className="secondary" onClick={beginNewWishlist}>Создать ещё один wishlist</button>
+                      <button className="secondary" type="button" onClick={() => setIsWishlistActionsOpen((current) => !current)}>
+                        {isWishlistActionsOpen ? "Скрыть действия" : "Ещё действия"}
+                      </button>
+                      {isWishlistActionsOpen && (
+                        <div className="action-menu">
+                          <button className="secondary" onClick={beginEditWishlist}>Редактировать</button>
+                          <button className="secondary danger" onClick={deleteWishlist}>Удалить</button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1482,6 +1627,10 @@ function App() {
                       Описание
                       <input value={wishlistDescription} onChange={(e) => setWishlistDescription(e.target.value)} placeholder="Пара слов для друзей" />
                     </label>
+                    <label>
+                      Доступен до
+                      <input type="date" value={wishlistExpiresAt} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setWishlistExpiresAt(e.target.value)} />
+                    </label>
                     <button type="submit">Создать wishlist</button>
                   </form>
                 ) : (
@@ -1495,6 +1644,10 @@ function App() {
                         <label>
                           Описание
                           <input value={editWishlistDescription} onChange={(e) => setEditWishlistDescription(e.target.value)} />
+                        </label>
+                        <label>
+                          Доступен до
+                          <input type="date" value={editWishlistExpiresAt} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setEditWishlistExpiresAt(e.target.value)} />
                         </label>
                         <div className="form-actions">
                           <button type="submit">Сохранить</button>
@@ -1517,7 +1670,7 @@ function App() {
                   <div className="panel-heading">
                     <div>
                       <p className="eyebrow">Новый подарок</p>
-                      <h2>Добавить хотелку</h2>
+                      <h2>Добавить подарок</h2>
                       {createdWishlist.items.length >= MAX_GIFTS_PER_WISHLIST && (
                         <p className="muted">В этом wishlist уже 100 подарков.</p>
                       )}
@@ -1600,7 +1753,7 @@ function App() {
                       </div>
                     </article>
                   ))}
-                  {createdWishlist.items.length === 0 && <p className="empty">Пока нет подарков. Добавьте первую хотелку.</p>}
+                  {createdWishlist.items.length === 0 && <p className="empty">Пока нет подарков. Добавьте первую хотелку выше.</p>}
                 </section>
               )}
             </div>
@@ -1620,7 +1773,7 @@ function App() {
                       <a className="button secondary small" href={`/wishlist/${reservation.shareToken}`}>Открыть</a>
                     </article>
                   ))}
-                  {reservations.length === 0 && <p className="empty">Вы пока ничего не бронировали.</p>}
+                  {reservations.length === 0 && <p className="empty">Вы пока ничего не бронировали. Откройте ссылку друга, чтобы выбрать подарок.</p>}
                 </div>
               </section>
 
@@ -1665,7 +1818,7 @@ function App() {
                       )
                     ))}
                   </div>
-                  {timelineNotifications.length === 0 && <p className="empty">Новых событий пока нет.</p>}
+                  {timelineNotifications.length === 0 && <p className="empty">Новых событий пока нет. Когда кто-то забронирует подарок или задаст вопрос, событие появится здесь.</p>}
                 </div>
               </section>
             </aside>

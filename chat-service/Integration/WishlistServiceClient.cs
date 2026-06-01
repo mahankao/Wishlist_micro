@@ -31,7 +31,7 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
             try
             {
                 var response = await _httpClient.GetAsync($"/wishlists/public/{shareToken}", linkedCts.Token);
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return new RoomValidation(RoomValidationResult.NotFound);
+                if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone) return new RoomValidation(RoomValidationResult.NotFound);
                 if (!response.IsSuccessStatusCode)
                 {
                     // Retry on transient non-success.
@@ -68,7 +68,7 @@ public class WishlistServiceClient(HttpClient httpClient, IOptions<WishlistServi
             try
             {
                 var response = await _httpClient.GetAsync($"/wishlists/public/{shareToken}", linkedCts.Token);
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return new RoomValidation(RoomValidationResult.NotFound);
+                if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone) return new RoomValidation(RoomValidationResult.NotFound);
                 if (response.IsSuccessStatusCode)
                 {
                     var payload = await response.Content.ReadFromJsonAsync<PublicWishlistLite>(cancellationToken: linkedCts.Token);

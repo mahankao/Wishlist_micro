@@ -206,6 +206,16 @@ h3 {
   justify-items: end;
 }
 
+.action-menu {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.full-width-action {
+  width: 100%;
+}
+
 .segmented-control {
   display: inline-flex;
   gap: 4px;
@@ -483,6 +493,31 @@ input::placeholder {
   min-height: 100%;
 }
 
+.product-card.reserved-card {
+  opacity: 0.68;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.product-card.reserved-card .gift-image img {
+  filter: grayscale(0.32) saturate(0.72);
+}
+
+.product-card.reserved-by-me-card {
+  border-color: #2f6f55;
+  background: #f0faf4;
+  box-shadow: 0 18px 46px rgba(47, 111, 85, 0.18);
+}
+
+.product-card.reserved-by-me-card .status-pill {
+  background: #2f6f55;
+  color: #ffffff;
+}
+
+.product-card.selected-card {
+  border-color: #2f6f55;
+  box-shadow: 0 18px 42px rgba(47, 111, 85, 0.16);
+}
+
 .gift-image {
   aspect-ratio: 4 / 3;
   overflow: hidden;
@@ -569,14 +604,58 @@ input::placeholder {
   overflow-wrap: anywhere;
 }
 
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.public-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 18px;
+  border: 1px solid #e4d8c9;
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.public-toolbar > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.public-toolbar span {
+  color: #60706b;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .center-panel {
   max-width: 680px;
   margin: 64px auto;
   text-align: center;
 }
 
-.conversation-panel {
-  margin-top: 26px;
+.chat-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(23, 33, 31, 0.24);
+}
+
+.chat-drawer {
+  width: min(520px, 100%);
+  height: 100%;
+  overflow: auto;
+  border-left: 1px solid #e4d8c9;
+  padding: clamp(18px, 3vw, 30px);
+  background: #fffaf3;
+  box-shadow: -20px 0 46px rgba(32, 42, 38, 0.18);
 }
 
 .messages {
@@ -601,6 +680,15 @@ input::placeholder {
 .message.mine {
   justify-self: end;
   background: #e2f2e8;
+}
+
+.message.owner-message {
+  border: 1px solid #b8d8c4;
+  background: #eff9f2;
+}
+
+.message.mine.owner-message {
+  background: #d6eddf;
 }
 
 .message span {
@@ -768,6 +856,11 @@ input::placeholder {
   .button-column {
     justify-items: stretch;
     width: 100%;
+  }
+
+  .public-toolbar {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .segmented-control {

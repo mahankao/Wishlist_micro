@@ -125,9 +125,9 @@ app.MapPost("/wishlists", async (
     // Пользовательские строки очищаются на входе, чтобы в БД попадали нормализованные значения.
     var title = request.Title.Trim();
     var description = request.Description?.Trim();
-    if (!IsValidWishlistPayload(title, description))
+    if (!IsValidWishlistPayload(title, description, request.ExpiresAtUtc, out var validationError))
     {
-        return Results.BadRequest(new { error = "Invalid wishlist payload." });
+        return Results.BadRequest(new { error = validationError });
     }
 
     var userLookup = await userServiceClient.UserExistsAsync(ownerUserId.Value, cancellationToken);
@@ -144,7 +144,8 @@ app.MapPost("/wishlists", async (
     {
         OwnerUserId = ownerUserId.Value,
         Title = title,
-        Description = string.IsNullOrWhiteSpace(description) ? null : description
+        Description = string.IsNullOrWhiteSpace(description) ? null : description,
+        ExpiresAtUtc = request.ExpiresAtUtc!.Value
     };
 
     db.Wishlists.Add(wishlist);
@@ -203,13 +204,14 @@ app.MapPut("/wishlists/{wishlistId:guid}", async (
 
     var title = request.Title.Trim();
     var description = request.Description?.Trim();
-    if (!IsValidWishlistPayload(title, description))
+    if (!IsValidWishlistPayload(title, description, request.ExpiresAtUtc, out var validationError))
     {
-        return Results.BadRequest(new { error = "Invalid wishlist payload." });
+        return Results.BadRequest(new { error = validationError });
     }
 
     wishlist.Title = title;
     wishlist.Description = string.IsNullOrWhiteSpace(description) ? null : description;
+    wishlist.ExpiresAtUtc = request.ExpiresAtUtc!.Value;
     await db.SaveChangesAsync(cancellationToken);
 
     return Results.Ok(ToWishlistResponse(wishlist, GetDisplayName(principal)));
@@ -420,6 +422,10 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/reserve", async (
     {
         return Results.StatusCode(StatusCodes.Status403Forbidden);
     }
+    if (IsExpired(item.Wishlist))
+    {
+        return Results.StatusCode(StatusCodes.Status410Gone);
+    }
 
     if (item.ReservedByUserId is not null && item.ReservedByUserId != reserverUserId.Value)
     {
@@ -501,6 +507,10 @@ app.MapPost("/wishlists/{wishlistId:guid}/items/{itemId:guid}/unreserve", async 
         .Include(x => x.Wishlist)
         .FirstOrDefaultAsync(x => x.WishlistId == wishlistId && x.Id == itemId, cancellationToken);
     if (item is null) return Results.NotFound(new { error = "Wishlist item not found." });
+    if (IsExpired(item.Wishlist))
+    {
+        return Results.StatusCode(StatusCodes.Status410Gone);
+    }
 
     if (item.ReservedByUserId is null)
     {
@@ -565,6 +575,7 @@ app.MapGet("/wishlists/public/{shareToken:guid}", async (
         .Include(x => x.Items.OrderBy(i => i.CreatedAtUtc))
         .FirstOrDefaultAsync(x => x.ShareToken == shareToken, cancellationToken);
     if (wishlist is null) return Results.NotFound(new { error = "Wishlist not found." });
+    if (IsExpired(wishlist)) return Results.StatusCode(StatusCodes.Status410Gone);
 
     var owner = await userServiceClient.GetUserAsync(wishlist.OwnerUserId, cancellationToken);
     return Results.Ok(ToPublicWishlistResponse(wishlist, owner?.DisplayName));
@@ -584,12 +595,34 @@ static string? GetDisplayName(ClaimsPrincipal principal) =>
     principal.FindFirstValue("display_name")
     ?? principal.FindFirstValue(ClaimTypes.Name);
 
-static bool IsValidWishlistPayload(string title, string? description)
+static bool IsValidWishlistPayload(string title, string? description, DateTime? expiresAtUtc, out string error)
 {
-    if (string.IsNullOrWhiteSpace(title) || title.Length > 200) return false;
-    if (description is not null && description.Length > 1000) return false;
+    if (string.IsNullOrWhiteSpace(title) || title.Length > 200)
+    {
+        error = "Wishlist title is required and must be at most 200 characters.";
+        return false;
+    }
+    if (description is not null && description.Length > 1000)
+    {
+        error = "Wishlist description must be at most 1000 characters.";
+        return false;
+    }
+    if (expiresAtUtc is null)
+    {
+        error = "Wishlist expiration date is required.";
+        return false;
+    }
+    if (expiresAtUtc.Value <= DateTime.UtcNow)
+    {
+        error = "Wishlist expiration date must be in the future.";
+        return false;
+    }
+
+    error = string.Empty;
     return true;
 }
+
+static bool IsExpired(Wishlist wishlist) => wishlist.ExpiresAtUtc <= DateTime.UtcNow;
 
 static bool IsValidItemPayload(string title, string? url, string? imageUrl, decimal? price, string? comment, out string error)
 {
@@ -656,6 +689,7 @@ static WishlistResponse ToWishlistResponse(Wishlist wishlist, string? ownerDispl
         wishlist.Description,
         wishlist.ShareToken,
         wishlist.CreatedAtUtc,
+        wishlist.ExpiresAtUtc,
         wishlist.Items
             .OrderBy(x => x.CreatedAtUtc)
             .Select(ToItemResponse)
@@ -669,6 +703,7 @@ static PublicWishlistResponse ToPublicWishlistResponse(Wishlist wishlist, string
         ownerDisplayName,
         wishlist.Title,
         wishlist.Description,
+        wishlist.ExpiresAtUtc,
         wishlist.Items
             .OrderBy(x => x.CreatedAtUtc)
             .Select(ToItemResponse)

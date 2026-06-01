@@ -1,8 +1,8 @@
 namespace WishlistService.Contracts;
 
-public record CreateWishlistRequest(string Title, string? Description);
+public record CreateWishlistRequest(string Title, string? Description, DateTime? ExpiresAtUtc);
 
-public record UpdateWishlistRequest(string Title, string? Description);
+public record UpdateWishlistRequest(string Title, string? Description, DateTime? ExpiresAtUtc);
 
 public record AddWishlistItemRequest(string Title, string? Url, string? ImageUrl, decimal? Price, string? Comment);
 
@@ -29,6 +29,7 @@ public record WishlistResponse(
     string? Description,
     Guid ShareToken,
     DateTime CreatedAtUtc,
+    DateTime ExpiresAtUtc,
     IReadOnlyList<WishlistItemResponse> Items
 );
 
@@ -38,6 +39,7 @@ public record PublicWishlistResponse(
     string? OwnerDisplayName,
     string Title,
     string? Description,
+    DateTime ExpiresAtUtc,
     IReadOnlyList<WishlistItemResponse> Items
 );
 

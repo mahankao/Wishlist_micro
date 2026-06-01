@@ -8,6 +8,7 @@ public class Wishlist
     public string? Description { get; set; }
     public Guid ShareToken { get; set; } = Guid.NewGuid();
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime ExpiresAtUtc { get; set; } = DateTime.UtcNow.AddDays(30);
 
     public List<WishlistItem> Items { get; set; } = [];
 }

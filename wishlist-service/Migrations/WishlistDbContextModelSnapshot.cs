@@ -79,6 +79,10 @@ namespace WishlistService.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
 
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at_utc");
+
                     b.Property<Guid>("OwnerUserId")
                         .HasColumnType("uuid");
 
