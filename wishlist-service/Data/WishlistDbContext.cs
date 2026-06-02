@@ -24,6 +24,7 @@ public class WishlistDbContext(DbContextOptions<WishlistDbContext> options) : Db
             entity.Property(x => x.Title).HasMaxLength(200).IsRequired();
             entity.Property(x => x.Description).HasMaxLength(1000);
             entity.Property(x => x.CreatedAtUtc).IsRequired();
+            entity.Property(x => x.ExpiresAtUtc).HasColumnName("expires_at_utc").IsRequired();
         });
 
         modelBuilder.Entity<WishlistItem>(entity =>
